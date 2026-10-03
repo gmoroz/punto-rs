@@ -5,6 +5,11 @@ use std::{
     path::Path,
 };
 
+/// Эффективный uid процесса: владелец /proc/self, без unsafe `geteuid()`.
+pub fn process_uid() -> io::Result<u32> {
+    Ok(fs::metadata("/proc/self")?.uid())
+}
+
 pub struct InstanceLock {
     _file: File,
 }
@@ -16,8 +21,7 @@ impl InstanceLock {
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
             Err(err) => return Err(err),
         }
-        // Владелец /proc/self - эффективный uid процесса: без unsafe geteuid().
-        let euid = fs::metadata("/proc/self")?.uid();
+        let euid = process_uid()?;
         let metadata = fs::symlink_metadata(directory)?;
         // В каталоге блокировки нельзя позволять заменять inode файла,
         // иначе два процесса смогут удерживать разные блокировки одного имени.

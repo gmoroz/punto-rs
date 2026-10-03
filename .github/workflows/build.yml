@@ -47,8 +47,8 @@ jobs:
 
       - name: Verify service unit
         run: |
-          sudo install -Dm755 target/debug/punto-rs /usr/local/bin/punto-rs
-          systemd-analyze verify systemd/punto-rs.service
+          install -Dm755 target/debug/punto-rs "$HOME/.local/bin/punto-rs"
+          systemd-analyze --user verify systemd/punto-rs.service
 
   build:
     name: Linux x86_64

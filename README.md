@@ -27,7 +27,7 @@ Switcher и Easy Switcher. Набрал `ghbdtn` вместо `привет`, н
 ## Установка
 
 Готовые статические сборки для `x86_64` публикуются в
-[GitHub Releases](https://github.com/netherguy4/punto-rs/releases). Скачать
+[GitHub Releases](https://github.com/gmoroz/punto-rs/releases). Скачать
 последнюю сборку для текущей архитектуры и проверить её checksum:
 
 ```sh
@@ -37,7 +37,7 @@ case "$ARCH" in
   *) echo "Архитектура $ARCH пока не поддерживается готовыми сборками" >&2; exit 1 ;;
 esac
 
-BASE_URL="https://github.com/netherguy4/punto-rs/releases/latest/download"
+BASE_URL="https://github.com/gmoroz/punto-rs/releases/latest/download"
 curl -fLO "$BASE_URL/punto-rs-linux-$ARCH.tar.gz"
 curl -fLO "$BASE_URL/punto-rs-linux-$ARCH.tar.gz.sha256"
 sha256sum -c "punto-rs-linux-$ARCH.tar.gz.sha256"
@@ -48,30 +48,36 @@ cd punto-rs
 Установить файлы из распакованного архива:
 
 ```sh
-sudo sh scripts/install.sh
-punto-rs --check-config
-punto-rs --check-session
-sudo systemctl daemon-reload
-sudo systemctl enable --now punto-rs
+sh scripts/install.sh
+~/.local/bin/punto-rs --check-config
+~/.local/bin/punto-rs --check-session
+systemctl --user daemon-reload
+systemctl --user enable --now punto-rs
 ```
 
-Права root нужны для чтения `/dev/input/*` и создания виртуальной клавиатуры
-через `/dev/uinput`. По умолчанию также нужны systemd-logind и системная
-D-Bus. Поддерживается локальная графическая сессия на `seat0`; TTY,
-экран входа и удалённые сессии не разрешают коррекцию.
+Root не нужен: демон работает как пользовательский сервис systemd и
+запускается вместе с `graphical-session.target`. Доступ к `/dev/input/*` и
+`/dev/uinput` даёт группа `input`; если пользователь в неё не входит, один раз
+выполните `sudo usermod -aG input "$USER"` и перелогиньтесь. Нужны
+systemd-logind и системная D-Bus. Коррекция разрешена только в локальной
+графической сессии на `seat0`, принадлежащей тому же пользователю: TTY, экран
+входа, удалённые сессии и сессии других пользователей её не получают.
 
-Установщик сохраняет существующий `/etc/punto-rs/config.conf`, а новый образец
-кладёт в `config.conf.example`. Он не запускает и не перезапускает сервис.
-При обновлении проверьте сохранённый конфиг через `punto-rs --check-config`,
-затем выполните `sudo systemctl daemon-reload` и `sudo systemctl restart punto-rs`.
-Для отката установите предыдущий архив и перезапустите сервис тем же способом.
+Файлы ставятся в домашний каталог: бинарник в `~/.local/bin/punto-rs`,
+конфиг в `~/.config/punto-rs/config.conf` (или `$XDG_CONFIG_HOME`), unit в
+`~/.config/systemd/user/punto-rs.service`. Установщик сохраняет существующий
+конфиг, а новый образец кладёт в `config.conf.example`. Сервис он не запускает
+и не перезапускает. При обновлении проверьте конфиг через
+`punto-rs --check-config`, затем выполните `systemctl --user daemon-reload` и
+`systemctl --user restart punto-rs`. Для отката установите предыдущий архив и
+перезапустите сервис тем же способом.
 
 Удаление с сохранением настроек:
 
 ```sh
-sudo systemctl disable --now punto-rs
-sudo rm /usr/local/bin/punto-rs /etc/systemd/system/punto-rs.service
-sudo systemctl daemon-reload
+systemctl --user disable --now punto-rs
+rm ~/.local/bin/punto-rs ~/.config/systemd/user/punto-rs.service
+systemctl --user daemon-reload
 ```
 
 ### Сборка из исходников
@@ -84,7 +90,7 @@ make install
 cd cli && cargo build --release --locked
 ```
 
-Установка из исходников: `sudo sh cli/scripts/install.sh cli/target/release/punto-rs`.
+Установка из исходников: `sh cli/scripts/install.sh cli/target/release/punto-rs`.
 
 Бинарный файл появится в `cli/target/release/punto-rs`.
 
@@ -125,7 +131,7 @@ cd cli && cargo build --release --locked
 
 ## Настройка
 
-Конфиг — `/etc/punto-rs/config.conf`, формат `ключ=значение`.
+Конфиг — `~/.config/punto-rs/config.conf`, формат `ключ=значение`.
 
 | Ключ | По умолчанию | Смысл |
 |---|---|---|
@@ -167,8 +173,8 @@ COSMIC 1.0.9 не обновляет `LockedHint` при блокировке э
 без logind: автоматическая защита при блокировке/смене сессии отключается.
 Пауза по хоткею остаётся доступной.
 
-Список устройств: `sudo punto-rs --list-devices`.
-Скан-коды клавиш: `sudo showkey`.
+Список устройств: `punto-rs --list-devices`.
+Скан-коды клавиш: `sudo showkey` или `wev`.
 
 ## Тесты
 
@@ -204,15 +210,15 @@ workflow использует этот файл как описание рели
 ```sh
 punto-rs --check-config
 punto-rs --check-session
-systemctl status punto-rs
-journalctl -u punto-rs -f
-sudo punto-rs -v -c /etc/punto-rs/config.conf   # с остановленным сервисом
+systemctl --user status punto-rs
+journalctl --user -u punto-rs -f
+punto-rs -v   # с остановленным сервисом
 ```
 
 Первые буквы выходят в старой раскладке — увеличьте `switch-delay`.
 Ничего не происходит — проверьте состояние сессии, паузу и совпадение
 `layout-switch` с системной комбинацией смены раскладки.
-Второй экземпляр не запускается: блокировка находится в `/run/punto-rs/daemon.lock`.
+Второй экземпляр не запускается: блокировка находится в `$XDG_RUNTIME_DIR/punto-rs/daemon.lock`.
 Файл остаётся после остановки, но сама блокировка освобождается ядром;
 удалять файл для повторного запуска не нужно.
 

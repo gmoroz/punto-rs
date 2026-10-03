@@ -10,6 +10,7 @@ use std::{
 
 use dbus::{
     Path,
+    arg::{PropMap, RefArg},
     blocking::{Connection, stdintf::org_freedesktop_dbus::Properties},
     message::MatchRule,
 };
@@ -151,17 +152,30 @@ fn snapshot(connection: &Connection) -> Result<Option<String>, dbus::Error> {
     let properties = session.get_all("org.freedesktop.login1.Session")?;
     let string = |name: &str| properties.get(name).and_then(|v| v.0.as_str());
     let boolean = |name: &str| properties.get(name).and_then(|v| v.0.as_i64());
-    let allowed = allowed_session(
-        string("Type"),
-        string("Class"),
-        string("Desktop"),
-        boolean("Active"),
-        boolean("LockedHint"),
-        boolean("Remote"),
-    );
+    let uid = crate::instance::process_uid()
+        .map_err(|err| dbus::Error::new_failed(&format!("uid процесса: {err}")))?;
+    let allowed = session_owner(&properties) == Some(u64::from(uid))
+        && allowed_session(
+            string("Type"),
+            string("Class"),
+            string("Desktop"),
+            boolean("Active"),
+            boolean("LockedHint"),
+            boolean("Remote"),
+        );
     let (current, _): (String, Path<'static>) =
         seat.get("org.freedesktop.login1.Seat", "ActiveSession")?;
     Ok((allowed && current == id).then_some(id))
+}
+
+/// uid владельца сессии из свойства logind `User` = (uid, путь).
+/// Группа input даёт читать все клавиатуры seat0, поэтому ввод чужой
+/// активной сессии не должен копиться и переигрываться.
+fn session_owner(properties: &PropMap) -> Option<u64> {
+    properties
+        .get("User")
+        .and_then(|v| v.0.as_iter())
+        .and_then(|mut fields| fields.next().and_then(RefArg::as_u64))
 }
 
 pub fn check() -> Result<Option<String>, dbus::Error> {
@@ -278,5 +292,14 @@ mod tests {
         guard.invalidate();
         guard.set(Some("a".into()));
         assert_ne!(guard.context().generation, before);
+    }
+
+    #[test]
+    fn session_owner_reads_uid_and_rejects_missing_user() {
+        let user: Box<dyn RefArg> =
+            Box::new((1000_u32, Path::from("/org/freedesktop/login1/user/_1000")));
+        let properties = PropMap::from([("User".to_string(), dbus::arg::Variant(user))]);
+        assert_eq!(session_owner(&properties), Some(1000));
+        assert_eq!(session_owner(&PropMap::new()), None);
     }
 }

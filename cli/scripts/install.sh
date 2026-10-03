@@ -3,22 +3,24 @@ set -eu
 
 source_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 binary=${1:-"$source_dir/punto-rs"}
-destination=${DESTDIR:-}
+bin_dir="$HOME/.local/bin"
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/punto-rs"
+unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
 if [ ! -f "$binary" ]; then
     echo "Binary not found: $binary" >&2
     exit 1
 fi
 
-install -d "$destination/usr/local/bin" "$destination/etc/punto-rs" "$destination/etc/systemd/system"
-install -m644 "$source_dir/config/punto-rs.conf" "$destination/etc/punto-rs/config.conf.example"
-if [ ! -e "$destination/etc/punto-rs/config.conf" ] && [ ! -L "$destination/etc/punto-rs/config.conf" ]; then
-    install -m644 "$source_dir/config/punto-rs.conf" "$destination/etc/punto-rs/config.conf"
+install -d "$bin_dir" "$config_dir" "$unit_dir"
+install -m644 "$source_dir/config/punto-rs.conf" "$config_dir/config.conf.example"
+if [ ! -e "$config_dir/config.conf" ] && [ ! -L "$config_dir/config.conf" ]; then
+    install -m644 "$source_dir/config/punto-rs.conf" "$config_dir/config.conf"
 fi
-install -m644 "$source_dir/systemd/punto-rs.service" "$destination/etc/systemd/system/punto-rs.service"
+install -m644 "$source_dir/systemd/punto-rs.service" "$unit_dir/punto-rs.service"
 # Замена inode позволяет обновлять файл, пока предыдущий бинарник ещё выполняется.
-temporary=$(mktemp -p "$destination/usr/local/bin")
+temporary=$(mktemp -p "$bin_dir")
 trap 'rm -f "$temporary"' EXIT HUP INT TERM
 install -m755 "$binary" "$temporary"
-mv -f "$temporary" "$destination/usr/local/bin/punto-rs"
+mv -f "$temporary" "$bin_dir/punto-rs"
 echo 'Files installed; existing config preserved. Service state has not been changed.'
