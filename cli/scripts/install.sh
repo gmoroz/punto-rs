@@ -17,7 +17,7 @@ if [ ! -e "$destination/etc/punto-rs/config.conf" ] && [ ! -L "$destination/etc/
 fi
 install -m644 "$source_dir/systemd/punto-rs.service" "$destination/etc/systemd/system/punto-rs.service"
 # Замена inode позволяет обновлять файл, пока предыдущий бинарник ещё выполняется.
-temporary=$(mktemp "$destination/usr/local/bin/.punto-rs.XXXXXX")
+temporary=$(mktemp -p "$destination/usr/local/bin")
 trap 'rm -f "$temporary"' EXIT HUP INT TERM
 install -m755 "$binary" "$temporary"
 mv -f "$temporary" "$destination/usr/local/bin/punto-rs"

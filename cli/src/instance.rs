@@ -16,13 +16,12 @@ impl InstanceLock {
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
             Err(err) => return Err(err),
         }
+        // Владелец /proc/self - эффективный uid процесса: без unsafe geteuid().
+        let euid = fs::metadata("/proc/self")?.uid();
         let metadata = fs::symlink_metadata(directory)?;
         // В каталоге блокировки нельзя позволять заменять inode файла,
         // иначе два процесса смогут удерживать разные блокировки одного имени.
-        if !metadata.is_dir()
-            || metadata.uid() != unsafe { libc::geteuid() }
-            || metadata.mode() & 0o022 != 0
-        {
+        if !metadata.is_dir() || metadata.uid() != euid || metadata.mode() & 0o022 != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "небезопасный каталог блокировки",
@@ -37,10 +36,7 @@ impl InstanceLock {
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(directory.join("daemon.lock"))?;
         let metadata = file.metadata()?;
-        if !metadata.is_file()
-            || metadata.uid() != unsafe { libc::geteuid() }
-            || metadata.nlink() != 1
-        {
+        if !metadata.is_file() || metadata.uid() != euid || metadata.nlink() != 1 {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "небезопасный файл блокировки",

@@ -76,17 +76,17 @@ sudo systemctl daemon-reload
 
 ### Сборка из исходников
 
-Нужны Rust 1.89.0 и C-компилятор для vendored libdbus. Версия Rust закреплена
-в `mise.toml`; инструменты устанавливаются через mise в окружение проекта:
+Нужны rustup и C-компилятор для vendored libdbus. Код крейта лежит в `cli/`,
+версия Rust закреплена в `cli/rust-toolchain.toml`, и rustup подтягивает её сам:
 
 ```sh
-mise install
-mise exec -- cargo build --release --locked
+make install
+cd cli && cargo build --release --locked
 ```
 
-Установка из исходников: `sudo sh scripts/install.sh target/release/punto-rs`.
+Установка из исходников: `sudo sh cli/scripts/install.sh cli/target/release/punto-rs`.
 
-Бинарный файл появится в `target/release/punto-rs`.
+Бинарный файл появится в `cli/target/release/punto-rs`.
 
 ## Использование
 
@@ -146,7 +146,7 @@ mise exec -- cargo build --release --locked
 6.6 использовалось `layout-switch=super+alt+37` (`Meta+Alt+K`, где `37` —
 скан-код K). Сначала добавьте две раскладки в настройках рабочего окружения
 и проверьте их переключение обычной клавиатурой. Версии окружений, условия
-и результаты проверки указаны в [отчёте приёмки](docs/release-validation.md).
+и результаты проверки указаны в [отчёте приёмки](cli/docs/release-validation.md).
 
 Клавиши задаются именем (`insert`, `pause`, `scrolllock`, `capslock`, `menu`,
 `rightctrl`, `f1`…`f12` и другие) либо скан-кодом из `input-event-codes.h`.
@@ -173,15 +173,15 @@ COSMIC 1.0.9 не обновляет `LockedHint` при блокировке э
 ## Тесты
 
 ```sh
-mise exec -- cargo test --all-targets --locked
-mise exec -- cargo clippy --all-targets --locked -- -D warnings
-mise exec -- cargo build --locked
-sh scripts/test-install.sh
+make full-check
 
 # Только в отдельной тестовой VM с работающим сервисом и стандартным конфигом:
-mise exec -- cargo build --release --example e2e --locked
+cd cli && cargo build --release --example e2e --locked
 sudo target/release/examples/e2e --live-session
 ```
+
+`make full-check` запускает fmt, Clippy, cargo deny, cargo machete, тесты
+nextest с порогом покрытия, проверку установщика и проектные гейты.
 
 Сквозной тест создаёт виртуальную клавиатуру, печатает на ней слово не в той
 раскладке, жмёт горячую клавишу и проверяет по выходному устройству демона,
@@ -190,13 +190,13 @@ sudo target/release/examples/e2e --live-session
 Этот пример не запускается командой `cargo test`: автоматические тесты
 проверяют основной цикл с подменённым устройством, ошибки записи, отмену,
 сессии и конфиг без доступа к клавиатуре. Итоговый текст и реакция приложений
-проверяются отдельно по [матрице приёмки](docs/release-validation.md).
+проверяются отдельно по [матрице приёмки](cli/docs/release-validation.md).
 
 GitHub Actions на каждом push и pull request запускает форматирование, Clippy,
 юнит-тесты и собирает статические архивы для `x86_64`. При push
-тега `vX.Y.Z`, совпадающего с версией в `Cargo.toml`, эти архивы и их SHA-256
+тега `vX.Y.Z`, совпадающего с версией в `cli/Cargo.toml`, эти архивы и их SHA-256
 checksums автоматически добавляются в GitHub Release.
-Перед созданием тега подготовьте заметки `docs/releases/vX.Y.Z.md`:
+Перед созданием тега подготовьте заметки `cli/docs/releases/vX.Y.Z.md`:
 workflow использует этот файл как описание релиза.
 
 ## Диагностика

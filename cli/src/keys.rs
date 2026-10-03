@@ -15,7 +15,7 @@ pub const KEY_INSERT: u16 = 110;
 pub const KEY_LEFTMETA: u16 = 125;
 pub const KEY_RIGHTMETA: u16 = 126;
 
-/// Кнопки указателя: BTN_LEFT (0x110) … BTN_TASK (0x117).
+/// Кнопки указателя: `BTN_LEFT` (0x110) … `BTN_TASK` (0x117).
 pub const BTN_LEFT: u16 = 0x110;
 pub const BTN_TASK: u16 = 0x117;
 

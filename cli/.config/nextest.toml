@@ -1,0 +1,6 @@
+[profile.default]
+retries = 0
+# Бюджет владельца 2–3 мин на полный прогон: не разгонять на все ядра.
+test-threads = 4
+slow-timeout = { period = "10s", terminate-after = 3 }
+global-timeout = "150s"

@@ -1,9 +1,17 @@
 //! Реальные evdev/uinput проверки. Только в отдельной VM: события попадают
 //! в активную сессию. Требуются стандартные хоткеи и задержки демона.
+// Ручной тестовый сценарий: паника на шаге и строки PASS и есть его отчёт.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    clippy::too_many_lines
+)]
 
 use evdev::{
-    uinput::{VirtualDevice, VirtualDeviceBuilder},
     AttributeSet, EventType, InputEvent, Key,
+    uinput::{VirtualDevice, VirtualDeviceBuilder},
 };
 use std::{
     collections::HashSet,
@@ -54,9 +62,10 @@ fn quiet(rx: &Receiver<(u16, i32)>, scenario: &str) {
     );
 }
 fn output(rx: &Receiver<(u16, i32)>) -> Vec<(u16, i32)> {
-    let mut events = vec![rx
-        .recv_timeout(Duration::from_secs(3))
-        .expect("no correction")];
+    let mut events = vec![
+        rx.recv_timeout(Duration::from_secs(3))
+            .expect("no correction"),
+    ];
     while let Ok(event) = rx.recv_timeout(Duration::from_millis(250)) {
         events.push(event);
     }
@@ -92,7 +101,7 @@ fn expected(strokes: &[(u16, bool)]) -> Vec<(u16, i32)> {
     events
 }
 fn main() {
-    if std::env::args().skip(1).collect::<Vec<_>>() != ["--live-session"] {
+    if std::env::args().collect::<Vec<_>>()[1..] != ["--live-session"] {
         eprintln!("Только в тестовой VM: e2e --live-session. События попадут в активное окно.");
         std::process::exit(2);
     }

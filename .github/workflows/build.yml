@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    working-directory: cli
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -21,11 +25,11 @@ jobs:
 
       - name: Install Rust
         run: |
-          rustup toolchain install 1.89.0 \
+          rustup toolchain install 1.98.1 \
             --profile minimal \
             --component rustfmt \
             --component clippy
-          rustup default 1.89.0
+          rustup default 1.98.1
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -60,8 +64,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes musl-tools
-          rustup toolchain install 1.89.0 --profile minimal
-          rustup default 1.89.0
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup default 1.98.1
           rustup target add "$RUST_TARGET"
 
       - name: Verify release tag
@@ -100,8 +104,8 @@ jobs:
             dist/punto-rs/config/punto-rs.conf
           install -Dm644 systemd/punto-rs.service \
             dist/punto-rs/systemd/punto-rs.service
-          install -Dm644 README.md dist/punto-rs/README.md
-          install -Dm644 LICENSE dist/punto-rs/LICENSE
+          install -Dm644 ../README.md dist/punto-rs/README.md
+          install -Dm644 ../LICENSE dist/punto-rs/LICENSE
           install -Dm755 scripts/install.sh dist/punto-rs/scripts/install.sh
           cp -R LICENSES dist/punto-rs/LICENSES
           cp -R docs dist/punto-rs/docs
@@ -116,8 +120,8 @@ jobs:
         with:
           name: punto-rs-linux-x86_64
           path: |
-            dist/punto-rs-linux-x86_64.tar.gz
-            dist/punto-rs-linux-x86_64.tar.gz.sha256
+            cli/dist/punto-rs-linux-x86_64.tar.gz
+            cli/dist/punto-rs-linux-x86_64.tar.gz.sha256
           if-no-files-found: error
 
   release:
@@ -139,6 +143,7 @@ jobs:
           merge-multiple: true
 
       - name: Create or update the release
+        working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -147,6 +152,6 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" dist/* --clobber
           else
             gh release create "$GITHUB_REF_NAME" dist/* \
-              --notes-file "docs/releases/${GITHUB_REF_NAME}.md" \
+              --notes-file "cli/docs/releases/${GITHUB_REF_NAME}.md" \
               --title "$GITHUB_REF_NAME"
           fi

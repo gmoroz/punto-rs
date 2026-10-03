@@ -214,13 +214,17 @@ mod tests {
                 fail_at: Some(fail_at),
                 ..Output::default()
             });
-            assert!(injector
-                .fix(&word(), &Config::default(), |_| Ok(()))
-                .is_err());
+            assert!(
+                injector
+                    .fix(&word(), &Config::default(), |_| Ok(()))
+                    .is_err()
+            );
             assert_released(&injector.output.events);
-            assert!(injector.output.events[fail_at..]
-                .iter()
-                .all(|(_, value)| *value == 0));
+            assert!(
+                injector.output.events[fail_at..]
+                    .iter()
+                    .all(|(_, value)| *value == 0)
+            );
         }
     }
     #[test]

@@ -2,16 +2,16 @@
 
 use std::{
     sync::{
+        Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
     },
     time::Duration,
 };
 
 use dbus::{
-    blocking::{stdintf::org_freedesktop_dbus::Properties, Connection},
-    message::MatchRule,
     Path,
+    blocking::{Connection, stdintf::org_freedesktop_dbus::Properties},
+    message::MatchRule,
 };
 
 const LOGIN: &str = "org.freedesktop.login1";
@@ -36,7 +36,7 @@ impl SessionGuard {
         })))
     }
     pub fn context(&self) -> Context {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         if state
             .valid_until
             .is_some_and(|deadline| deadline <= std::time::Instant::now())
@@ -48,7 +48,7 @@ impl SessionGuard {
         state.clone()
     }
     pub fn set(&self, session: Option<String>) {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         state.valid_until = Some(std::time::Instant::now() + Duration::from_secs(2));
         if state.session != session {
             state.generation += 1;
@@ -56,7 +56,7 @@ impl SessionGuard {
         }
     }
     fn invalidate(&self) {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         state.generation += 1;
         state.session = None;
     }
@@ -65,7 +65,7 @@ impl SessionGuard {
         while !stopped.load(Ordering::Relaxed) {
             if let Err(err) = self.watch(stopped) {
                 self.invalidate();
-                eprintln!("punto-rs: проверка сессии недоступна, коррекция приостановлена: {err}");
+                log!("punto-rs: проверка сессии недоступна, коррекция приостановлена: {err}");
                 for _ in 0..30 {
                     if stopped.load(Ordering::Relaxed) {
                         return;
@@ -113,11 +113,11 @@ impl SessionGuard {
                 true
             })?;
         }
-        let mut last_check = std::time::Instant::now() - Duration::from_secs(2);
+        let mut last_check: Option<std::time::Instant> = None;
         while !stopped.load(Ordering::Relaxed) {
             connection.process(Duration::from_millis(50))?;
             if dirty.swap(false, Ordering::Relaxed)
-                || last_check.elapsed() >= Duration::from_secs(1)
+                || last_check.is_none_or(|at| at.elapsed() >= Duration::from_secs(1))
             {
                 let snapshot = snapshot(&connection)?;
                 // Обрабатываем накопившиеся сигналы до разрешения ввода: состояние
@@ -126,7 +126,7 @@ impl SessionGuard {
                 if !dirty.load(Ordering::Relaxed) {
                     self.set(snapshot);
                 }
-                last_check = std::time::Instant::now();
+                last_check = Some(std::time::Instant::now());
             }
         }
         self.invalidate();
@@ -258,7 +258,11 @@ mod tests {
         let guard = SessionGuard::new(true);
         guard.set(Some("a".into()));
         let before = guard.context().generation;
-        guard.0.lock().unwrap().valid_until = Some(std::time::Instant::now());
+        guard
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .valid_until = Some(std::time::Instant::now());
         assert!(guard.context().session.is_none());
         assert_ne!(guard.context().generation, before);
     }

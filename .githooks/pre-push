@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+marker="$(git rev-parse --git-dir)/full-check-ok"
+if [ ! -f "$marker" ]; then
+    printf 'pre-push: нет маркера full-check. Выполни make push.\n' >&2
+    exit 1
+fi
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    case "$local_sha" in
+        0000000000000000000000000000000000000000) continue ;;
+    esac
+    if [ "$(< "$marker")" != "$local_sha" ]; then
+        printf 'pre-push: full-check выполнен не для отправляемого SHA. Выполни make push.\n' >&2
+        exit 1
+    fi
+done
+
+exit 0

@@ -1,1 +1,16 @@
-/target
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
+.venv/
+node_modules/
+target/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+dist/
+build/
+*.py[cod]

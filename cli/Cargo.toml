@@ -1,0 +1,50 @@
+[package]
+name = "punto-rs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+description = "Keyboard layout corrector daemon for Linux — retypes mistyped text in the right layout (Punto Switcher alternative)"
+license = "MIT"
+repository = "https://github.com/netherguy4/punto-rs"
+readme = "../README.md"
+keywords = ["keyboard", "layout", "evdev", "uinput", "linux"]
+categories = ["command-line-utilities"]
+publish = false
+
+[dependencies]
+evdev = "=0.12.2"
+dbus = { version = "=0.9.12", features = ["vendored"] }
+libc = "=0.2.189"
+signal-hook = "=0.3.18"
+
+# CI runner: 14 GB SSD. Полный debug по deps раздувает target/debug и llvm-cov-target.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.test]
+debug = "line-tables-only"
+
+[profile.test.package."*"]
+debug = false
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
