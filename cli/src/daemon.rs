@@ -71,19 +71,30 @@ impl Capture<'_> {
         }
         drop(grab);
         let released_at = SystemTime::now();
-        // Ввод под захватом, который поток устройства ещё не успел передать.
-        while let Ok(message) = self.rx.recv_timeout(CONTROL_INTERVAL) {
+        // Ввод под захватом, который поток устройства ещё не успел передать, и
+        // отпускание переигранных из него клавиш: оно приходит уже без захвата.
+        // Без него виртуальная клавиша остаётся зажатой, и композитор глотает
+        // ту же клавишу с настоящей клавиатуры.
+        loop {
+            let message = match self.rx.recv_timeout(CONTROL_INTERVAL) {
+                Ok(message) => message,
+                Err(RecvTimeoutError::Timeout) if injector.holding() && !self.interrupted() => {
+                    continue;
+                }
+                Err(_) => break,
+            };
             let captured = (self.grabbed_at..released_at).contains(&message.at);
             self.deliver(message, captured, injector, engine, cfg)?;
-            if !captured {
+            if !captured && !injector.holding() {
                 break;
             }
         }
-        Ok(())
+        injector.release_all()
     }
 
     /// Передаёт событие движку; `captured` - композитор его не видел, и
-    /// клавишу надо переиграть.
+    /// клавишу надо переиграть. Отпускание клавиши, которую держит
+    /// виртуальная клавиатура, переигрывается всегда.
     fn deliver<T: KeyOutput>(
         &self,
         message: Message,
@@ -92,7 +103,9 @@ impl Capture<'_> {
         engine: &mut Engine,
         cfg: &Config,
     ) -> io::Result<()> {
-        if let (true, DeviceEvent::Key(key)) = (captured, &message.event) {
+        if let DeviceEvent::Key(key) = &message.event
+            && (captured || key.value == 0)
+        {
             injector.forward(key.code, key.value)?;
         }
         if message.generation == self.generation {

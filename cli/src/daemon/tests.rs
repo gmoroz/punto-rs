@@ -276,3 +276,55 @@ fn test_wait_for_input_switch_pause_ends_on_new_layout_signal() {
     assert!(result.is_ok());
     assert!(started.elapsed() >= Duration::from_millis(50));
 }
+
+#[test]
+fn test_replay_key_pressed_under_grab_released_after_it_not_left_held() {
+    // Живой случай: пробел нажат под захватом, поток передал его уже после
+    // снятия захвата, а отпускание пришло без захвата.
+    let (tx, rx) = mpsc::sync_channel(4);
+    let grabbed_at = SystemTime::now() - Duration::from_secs(1);
+    for (value, at) in [
+        (1, grabbed_at + Duration::from_millis(500)),
+        (0, SystemTime::now() + Duration::from_secs(60)),
+    ] {
+        tx.send(Message {
+            generation: 0,
+            event: key(keys::KEY_SPACE, value),
+            at,
+        })
+        .unwrap();
+    }
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let stopped = Arc::new(AtomicBool::new(false));
+    let mut injector = Injector::with_output(TestOutput {
+        events: events.clone(),
+        tx,
+        during_fix: Vec::new(),
+        fail_after: None,
+        stopped: stopped.clone(),
+    });
+    let cfg = Config {
+        session_guard: false,
+        ..Config::default()
+    };
+    let mut engine = Engine::new(&cfg, Instant::now());
+    let guard = SessionGuard::new(false);
+    let grabs = Grabs::default();
+    let capture = Capture {
+        rx: &rx,
+        guard: &guard,
+        stopped: &stopped,
+        generation: 0,
+        grabbed_at,
+        queue: Vec::new(),
+        switched: false,
+    };
+    capture
+        .replay(grabs.grab().unwrap(), &mut injector, &mut engine, &cfg)
+        .unwrap();
+    assert!(!injector.holding());
+    assert_eq!(
+        *events.lock().unwrap(),
+        [(keys::KEY_SPACE, 1), (keys::KEY_SPACE, 0)]
+    );
+}

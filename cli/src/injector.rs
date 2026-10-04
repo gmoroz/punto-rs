@@ -88,7 +88,8 @@ impl<T: KeyOutput> Injector<T> {
         !self.pressed.is_empty()
     }
 
-    fn release_all(&mut self) -> io::Result<()> {
+    /// Отпускает все клавиши, нажатые виртуальной клавиатурой.
+    pub fn release_all(&mut self) -> io::Result<()> {
         let mut error = None;
         for code in self.pressed.clone().into_iter().rev() {
             if let Err(err) = self.emit(code, 0) {
