@@ -258,6 +258,24 @@ fn test_auto_wrong_word_then_space_schedules_word_with_space() {
 }
 
 #[test]
+fn test_auto_single_letter_alone_kept_before_fixed_word_joins_fix() {
+    // «f jy» в EN = «а он»; «a jy» - английское «a» остаётся.
+    const F: u16 = 33;
+    const A: u16 = 30;
+    const ON_ON_EN: [u16; 3] = [36, 21, keys::KEY_SPACE];
+    let mut h = Harness::on_layout(Some(Lang::En));
+    h.type_codes(&[F, keys::KEY_SPACE]);
+    assert!(h.ready().is_none());
+    h.type_codes(&ON_ON_EN);
+    let codes: Vec<u16> = h.ready().unwrap().strokes.iter().map(|s| s.code).collect();
+    assert_eq!(codes, [&[F, keys::KEY_SPACE][..], &ON_ON_EN].concat());
+    let mut h = Harness::on_layout(Some(Lang::En));
+    h.type_codes(&[A, keys::KEY_SPACE]);
+    h.type_codes(&ON_ON_EN);
+    assert_eq!(h.ready().unwrap().strokes.len(), ON_ON_EN.len());
+}
+
+#[test]
 fn test_auto_right_word_unknown_layout_or_disabled_not_scheduled() {
     let mut h = Harness::on_layout(Some(Lang::En));
     h.type_codes(&HELLO);

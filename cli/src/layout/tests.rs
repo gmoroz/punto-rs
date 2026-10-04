@@ -73,6 +73,19 @@ fn test_wrong_layout_ghbdtn_on_en_switched_privet_on_ru_kept() {
 }
 
 #[test]
+fn test_wrong_layout_short_words_by_list_single_letter_never() {
+    // jy = «он», шы = «is»; «on»/«он» на своём месте и одна буква f/«а» - нет.
+    assert!(wrong_layout(&keys_for(Lang::En, "jy"), Lang::En));
+    assert!(wrong_layout(&keys_for(Lang::Ru, "шы"), Lang::Ru));
+    assert!(!wrong_layout(&keys_for(Lang::En, "on"), Lang::En));
+    assert!(!wrong_layout(&keys_for(Lang::Ru, "он"), Lang::Ru));
+    assert!(!wrong_layout(&keys_for(Lang::En, "F"), Lang::En));
+    assert!(short_wrong(&keys_for(Lang::En, "F"), Lang::En));
+    assert!(!short_wrong(&keys_for(Lang::En, "a"), Lang::En));
+    assert!(short_wrong(&keys_for(Lang::En, "t`"), Lang::En));
+}
+
+#[test]
 fn test_scores_digits_or_short_word_not_candidate() {
     assert!(scores(&keys_for(Lang::En, "ghb2"), Lang::En).is_none());
     assert!(scores(&keys_for(Lang::En, "yt"), Lang::En).is_none());

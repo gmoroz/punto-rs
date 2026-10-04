@@ -13,7 +13,7 @@ use crate::{
     config::Config,
     devices::{Grab, Grabs},
     engine::{DeviceEvent, Engine},
-    injector::{Injector, KeyOutput},
+    injector::{Injector, KeyOutput, Pause},
     session::SessionGuard,
 };
 
@@ -36,6 +36,8 @@ struct Capture<'a> {
     generation: u64,
     grabbed_at: SystemTime,
     queue: Vec<Message>,
+    /// KDE сообщила о новой раскладке после захвата.
+    switched: bool,
 }
 
 impl Capture<'_> {
@@ -182,9 +184,10 @@ pub fn run<T: KeyOutput>(
                 generation,
                 grabbed_at,
                 queue: Vec::new(),
+                switched: false,
             };
-            let result = injector.fix(&fix.strokes, cfg, |delay| {
-                wait_for_input(&mut capture, &mut engine, cfg, delay)
+            let result = injector.fix(&fix.strokes, cfg, |pause| {
+                wait_for_input(&mut capture, &mut engine, cfg, pause)
             });
             match result {
                 Ok(()) => engine.switched(),
@@ -201,17 +204,22 @@ pub fn run<T: KeyOutput>(
     }
 }
 
-/// Ждёт `delay`, копя ввод под захватом в очередь. `Interrupted` - коррекцию
+/// Ждёт `pause`, копя ввод под захватом в очередь. `Interrupted` - коррекцию
 /// надо прервать: ввод до захвата, клик, смена сессии или устройств, остановка.
 fn wait_for_input(
     capture: &mut Capture,
     engine: &mut Engine,
     cfg: &Config,
-    delay: Duration,
+    pause: Pause,
 ) -> io::Result<()> {
     let rx = capture.rx;
-    let deadline = Instant::now() + delay;
+    let deadline = Instant::now() + pause.duration();
     loop {
+        // Сигнал KDE о новой раскладке приходит после того, как композитор её
+        // применил: дальше ждать срок `switch-delay` незачем.
+        if capture.switched && matches!(pause, Pause::Switch(_)) {
+            return Ok(());
+        }
         if capture.interrupted() {
             return Err(io::Error::new(
                 io::ErrorKind::Interrupted,
@@ -248,6 +256,7 @@ fn wait_for_input(
                 && message.at >= capture.grabbed_at
                 && matches!(message.event, DeviceEvent::Key(_) | DeviceEvent::Layout(_));
             if captured {
+                capture.switched |= matches!(message.event, DeviceEvent::Layout(Some(_)));
                 capture.queue.push(message);
                 continue;
             }

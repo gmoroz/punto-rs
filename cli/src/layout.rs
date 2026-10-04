@@ -231,6 +231,54 @@ pub fn scores(keys: &[(u16, bool)], shown: Lang) -> Option<Scores> {
 /// `shown` - раскладка, в которой слово сейчас на экране.
 pub fn wrong_layout(keys: &[(u16, bool)], shown: Lang) -> bool {
     scores(keys, shown).is_some_and(|scores| scores.should_switch(MIN_MARGIN, MAX_ALT_COST))
+        // Одна буква сама не исправляется: `f`/`а`, `d`/`в` одинаково возможны.
+        || (keys.len() == 2 && short_wrong(keys, shown) && !shown_known(keys, shown))
+}
+
+/// Частые слова из 1-2 букв: статистики у них нет, решает закрытый список.
+const EN_SHORT: [&str; 29] = [
+    "a", "i", "am", "an", "as", "at", "be", "by", "do", "go", "he", "hi", "if", "in", "is", "it",
+    "me", "my", "no", "of", "oh", "ok", "on", "or", "so", "to", "up", "us", "we",
+];
+const RU_SHORT: [&str; 41] = [
+    "а", "в", "и", "к", "о", "с", "у", "я", "ж", "бы", "во", "вы", "да", "до", "ее", "ей", "же",
+    "за", "из", "им", "их", "ко", "ли", "мы", "на", "не", "ни", "но", "ну", "об", "ой", "он", "от",
+    "по", "со", "та", "те", "то", "ты", "уж", "ах",
+];
+
+/// Запись нажатий в раскладке `lang` в нижнем регистре, `ё` -> `е`.
+fn lowercase(lang: Lang, keys: &[(u16, bool)]) -> Option<String> {
+    keys.iter()
+        .map(|&(code, shift)| {
+            let ch = key_char(lang, code, shift)?.to_lowercase().next()?;
+            Some(if ch == 'ё' { 'е' } else { ch })
+        })
+        .collect()
+}
+
+/// Есть ли запись на экране в словаре; с не-буквами внутри или по краям - нет.
+fn shown_known(keys: &[(u16, bool)], shown: Lang) -> bool {
+    lowercase(shown, keys)
+        .and_then(|text| {
+            text.chars()
+                .map(|ch| letter_index(shown, ch))
+                .collect::<Option<Vec<_>>>()
+        })
+        .is_some_and(|letters| known(shown, &letters))
+}
+
+/// Короткое слово (1-2 нажатия) в чужой раскладке: в другой раскладке это
+/// частое слово из списка, а на экране - нет. Для одной буквы признак слабый,
+/// и движок применяет его только перед словом, которое исправляется.
+pub fn short_wrong(keys: &[(u16, bool)], shown: Lang) -> bool {
+    let short = |lang: Lang| {
+        let words: &[&str] = match lang {
+            Lang::En => &EN_SHORT,
+            Lang::Ru => &RU_SHORT,
+        };
+        lowercase(lang, keys).is_some_and(|text| words.contains(&text.as_str()))
+    };
+    keys.len() <= 2 && short(shown.other()) && !short(shown)
 }
 
 // Явный путь: модуль подключают и через `#[path]` из `examples/`.

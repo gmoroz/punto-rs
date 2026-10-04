@@ -10,7 +10,7 @@
 #[path = "../src/layout.rs"]
 mod layout;
 
-use layout::{Lang, MAX_ALT_COST, MIN_MARGIN, Scores, key_char, scores};
+use layout::{Lang, MAX_ALT_COST, MIN_MARGIN, Scores, key_char, scores, wrong_layout};
 use std::collections::BTreeMap;
 
 struct Case {
@@ -18,6 +18,8 @@ struct Case {
     typed: String,
     should_fix: bool,
     scores: Option<Scores>,
+    /// Решение `wrong_layout` целиком, со списком коротких слов.
+    fixed: bool,
 }
 
 /// Нажатия, которые дают `text` в раскладке `lang`.
@@ -49,15 +51,17 @@ fn main() {
             } else {
                 Lang::Ru
             };
+            let keys = keys_for(lang, fields[3]);
             Case {
                 class: fields[1].into(),
                 typed: fields[3].into(),
                 should_fix: fields[4] == "fix",
-                scores: scores(&keys_for(lang, fields[3]), lang),
+                scores: scores(&keys, lang),
+                fixed: wrong_layout(&keys, lang),
             }
         })
         .collect();
-    let current = |case: &Case| decide(case, MIN_MARGIN, MAX_ALT_COST);
+    let current = |case: &Case| case.fixed;
     let mut by_class: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
     for case in &cases {
         let entry = by_class.entry(&case.class).or_default();
@@ -70,7 +74,9 @@ fn main() {
     }
     println!("ошибки (класс, набрано, цена экран/другая, словарь экран/другая):");
     for case in &cases {
-        if case.should_fix != current(case) && case.class != "short_wrong" {
+        // Одна буква сама не исправляется по замыслу: ошибкой не считается.
+        let single = case.typed.chars().count() == 1;
+        if case.should_fix != current(case) && !(case.class == "short_wrong" && single) {
             match case.scores {
                 Some(s) => println!(
                     "  {:<12} {:<20} {:.2}/{:.2} {}/{}",

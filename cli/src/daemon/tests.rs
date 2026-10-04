@@ -151,7 +151,7 @@ fn wait(
     guard: &SessionGuard,
     generation: u64,
     stopped: bool,
-    delay: Duration,
+    pause: Pause,
 ) -> (io::Result<()>, usize) {
     let cfg = Config {
         session_guard: false,
@@ -166,8 +166,9 @@ fn wait(
         generation,
         grabbed_at: SystemTime::now(),
         queue: Vec::new(),
+        switched: false,
     };
-    let result = wait_for_input(&mut capture, &mut engine, &cfg, delay);
+    let result = wait_for_input(&mut capture, &mut engine, &cfg, pause);
     (result, capture.queue.len())
 }
 
@@ -181,7 +182,7 @@ fn new_input_interrupts_long_wait_immediately() {
         &SessionGuard::new(false),
         0,
         false,
-        Duration::from_secs(2),
+        Pause::Fixed(Duration::from_secs(2)),
     );
     assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
     assert!(started.elapsed() < Duration::from_secs(1));
@@ -192,8 +193,16 @@ fn session_change_and_shutdown_cancel_before_next_key() {
     let (_tx, rx) = mpsc::sync_channel(1);
     let guard = SessionGuard::new(true);
     guard.set(Some("session".into()));
-    assert!(wait(&rx, &guard, 0, false, Duration::ZERO).0.is_err());
-    assert!(wait(&rx, &guard, 1, true, Duration::ZERO).0.is_err());
+    assert!(
+        wait(&rx, &guard, 0, false, Pause::Fixed(Duration::ZERO))
+            .0
+            .is_err()
+    );
+    assert!(
+        wait(&rx, &guard, 1, true, Pause::Fixed(Duration::ZERO))
+            .0
+            .is_err()
+    );
 }
 
 #[test]
@@ -201,11 +210,11 @@ fn wait_for_input_closed_stream_or_stale_generation_interrupts() {
     let guard = SessionGuard::new(false);
     let (tx, rx) = mpsc::sync_channel(1);
     drop(tx);
-    let (result, _) = wait(&rx, &guard, 0, false, Duration::from_secs(2));
+    let (result, _) = wait(&rx, &guard, 0, false, Pause::Fixed(Duration::from_secs(2)));
     assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
     let (tx, rx) = mpsc::sync_channel(1);
     tx.send(message(5, DeviceEvent::Click)).unwrap();
-    let (result, _) = wait(&rx, &guard, 0, false, Duration::from_secs(2));
+    let (result, _) = wait(&rx, &guard, 0, false, Pause::Fixed(Duration::from_secs(2)));
     assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
 }
 
@@ -219,7 +228,7 @@ fn test_wait_for_input_key_before_grab_interrupts_after_grab_queued() {
         at: SystemTime::UNIX_EPOCH,
     })
     .unwrap();
-    let (result, queued) = wait(&rx, &guard, 0, false, Duration::ZERO);
+    let (result, queued) = wait(&rx, &guard, 0, false, Pause::Fixed(Duration::ZERO));
     assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
     assert_eq!(queued, 0);
     let (tx, rx) = mpsc::sync_channel(2);
@@ -235,8 +244,35 @@ fn test_wait_for_input_key_before_grab_interrupts_after_grab_queued() {
             })
             .unwrap();
         }
-        wait(&rx, &guard, 0, false, Duration::ZERO)
+        wait(&rx, &guard, 0, false, Pause::Fixed(Duration::ZERO))
     };
     assert!(result.is_ok());
     assert_eq!(queued, 2);
+}
+
+#[test]
+fn test_wait_for_input_switch_pause_ends_on_new_layout_signal() {
+    let guard = SessionGuard::new(false);
+    let (tx, rx) = mpsc::sync_channel(1);
+    tx.send(Message {
+        generation: 0,
+        event: DeviceEvent::Layout(Some(crate::layout::Lang::Ru)),
+        at: SystemTime::now() + Duration::from_secs(60),
+    })
+    .unwrap();
+    let started = Instant::now();
+    let (result, queued) = wait(&rx, &guard, 0, false, Pause::Switch(Duration::from_secs(2)));
+    assert!(result.is_ok());
+    assert_eq!(queued, 1);
+    assert!(started.elapsed() < Duration::from_secs(1));
+    let started = Instant::now();
+    let (result, _) = wait(
+        &rx,
+        &guard,
+        0,
+        false,
+        Pause::Switch(Duration::from_millis(50)),
+    );
+    assert!(result.is_ok());
+    assert!(started.elapsed() >= Duration::from_millis(50));
 }

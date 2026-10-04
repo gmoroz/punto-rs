@@ -79,6 +79,27 @@ impl HeldKeys {
     }
 }
 
+/// Начало исправления слова с `start`: короткие слова перед ним через один
+/// пробел в той же чужой раскладке (`F jy` -> `А он`) исправляются вместе с ним.
+fn short_words_before(phrase: &[Stroke], mut start: usize, shown: Lang) -> usize {
+    while start >= 2 && phrase[start - 1].code == keys::KEY_SPACE {
+        let end = start - 1;
+        let begin = phrase[..end]
+            .iter()
+            .rposition(|stroke| keys::is_separator(stroke.code))
+            .map_or(0, |index| index + 1);
+        let letters: Vec<(u16, bool)> = phrase[begin..end]
+            .iter()
+            .map(|stroke| (stroke.code, stroke.shift))
+            .collect();
+        if letters.is_empty() || !layout::short_wrong(&letters, shown) {
+            break;
+        }
+        start = begin;
+    }
+    start
+}
+
 pub struct PendingFix {
     pub strokes: Vec<Stroke>,
     pub phrase: bool,
@@ -132,8 +153,10 @@ impl Engine {
             .collect();
         // Ровно один пробел после слова: второй пробел слово уже не трогает.
         if word.len() == letters.len() + 1 && layout::wrong_layout(&letters, shown) {
+            let phrase = self.buffer.phrase();
+            let start = short_words_before(phrase, phrase.len() - word.len(), shown);
             self.pending = Some(PendingFix {
-                strokes: word.to_vec(),
+                strokes: phrase[start..].to_vec(),
                 phrase: false,
                 auto: true,
                 trigger: keys::KEY_SPACE,

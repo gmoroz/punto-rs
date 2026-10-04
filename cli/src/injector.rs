@@ -7,6 +7,22 @@ use evdev::{AttributeSet, EventType, InputEvent, KeyCode};
 
 use crate::{config::Config, keys, state::Stroke};
 
+/// Пауза между шагами коррекции.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pause {
+    Fixed(Duration),
+    /// Ожидание новой раскладки: заканчивается раньше срока по её сигналу.
+    Switch(Duration),
+}
+
+impl Pause {
+    pub fn duration(self) -> Duration {
+        match self {
+            Pause::Fixed(duration) | Pause::Switch(duration) => duration,
+        }
+    }
+}
+
 pub trait KeyOutput {
     fn emit_key(&mut self, code: u16, value: i32) -> io::Result<()>;
 }
@@ -87,18 +103,18 @@ impl<T: KeyOutput> Injector<T> {
         code: u16,
         value: i32,
         delay: Duration,
-        wait: &mut impl FnMut(Duration) -> io::Result<()>,
+        wait: &mut impl FnMut(Pause) -> io::Result<()>,
     ) -> io::Result<()> {
-        wait(Duration::ZERO)?;
+        wait(Pause::Fixed(Duration::ZERO))?;
         self.emit(code, value)?;
-        wait(delay)
+        wait(Pause::Fixed(delay))
     }
 
     fn tap(
         &mut self,
         code: u16,
         delay: Duration,
-        wait: &mut impl FnMut(Duration) -> io::Result<()>,
+        wait: &mut impl FnMut(Pause) -> io::Result<()>,
     ) -> io::Result<()> {
         self.key(code, 1, delay, wait)?;
         self.key(code, 0, delay, wait)
@@ -108,7 +124,7 @@ impl<T: KeyOutput> Injector<T> {
         &mut self,
         strokes: &[Stroke],
         cfg: &Config,
-        mut wait: impl FnMut(Duration) -> io::Result<()>,
+        mut wait: impl FnMut(Pause) -> io::Result<()>,
     ) -> io::Result<()> {
         if strokes.is_empty() {
             return Ok(());
@@ -118,14 +134,14 @@ impl<T: KeyOutput> Injector<T> {
             for _ in strokes {
                 self.tap(keys::KEY_BACKSPACE, delay, &mut wait)?;
             }
-            wait(Duration::from_millis(cfg.post_backspace_ms))?;
+            wait(Pause::Fixed(Duration::from_millis(cfg.post_backspace_ms)))?;
             for &code in &cfg.layout_switch {
                 self.key(code, 1, delay, &mut wait)?;
             }
             for &code in cfg.layout_switch.iter().rev() {
                 self.key(code, 0, delay, &mut wait)?;
             }
-            wait(Duration::from_millis(cfg.switch_delay_ms))?;
+            wait(Pause::Switch(Duration::from_millis(cfg.switch_delay_ms)))?;
             for stroke in strokes {
                 if stroke.shift {
                     self.key(keys::KEY_LEFTSHIFT, 1, delay, &mut wait)?;
