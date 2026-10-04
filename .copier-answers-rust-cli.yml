@@ -1,5 +1,5 @@
 # Changes here will be overwritten by Copier
 _commit: 0.9.1
-_src_path: git+file:///home/user/Documents/projects/scaffold-cubes
+_src_path: https://github.com/gmoroz/scaffold-cubes.git
 layer: rust-cli
 rust_cli_dir: cli
