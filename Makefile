@@ -15,7 +15,7 @@ JSCPD_VERSION := 5.3.3
 	$(INSTALL_TARGETS) $(FORMAT_TARGETS) $(LINT_TARGETS) $(TEST_TARGETS)
 
 help: ## Показать доступные команды
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-16s %s\\n", $$1, $$2}'
+	@grep -h -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-16s %s\n", $$1, $$2}'
 
 install: $(INSTALL_TARGETS) ## Подключить git hooks
 	@git config core.hooksPath .githooks
