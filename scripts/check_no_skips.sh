@@ -2,7 +2,7 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
-pattern='pytest\.mark\.(skip|skipif|xfail)\b|pytest\.skip\(|#\[ignore\]|\.skip\(|\bxit\(|\bxdescribe\(|\.only\('
+pattern='pytest\.mark\.(skip|skipif|xfail)\b|pytest\.skip\(|#\[ignore\]|\b(describe|it|test|suite|context)\.(skip|only)\(|\bxit\(|\bxdescribe\('
 failed=0
 
 while IFS= read -r -d '' file; do
