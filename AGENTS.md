@@ -19,6 +19,7 @@ punto-rs — пользовательский демон Linux/Wayland для и
 - `make lint` — выполнить корневые проверки, fmt, Clippy, cargo deny и cargo machete.
 - `make test` — проверить установщик, затем выполнить nextest и coverage; rust lint является зависимостью тестов.
 - `make full-check` — параллельно выполнить lint и test; маркер для push записывается только в чистом дереве.
+- `make deploy` — собрать release, установить в домашний каталог и перезапустить user-сервис.
 - `make push` — потребовать чистое дерево, выполнить full-check и отправить текущую ветку в origin.
 
 Составные цели доступны и отдельно: `make rust-cli-install`, `make rust-cli-format`, `make rust-cli-lint`, `make rust-cli-test`, `make punto-rs-install-test`. Не запускай `git push` напрямую: отправляй изменения только через `make push`.
