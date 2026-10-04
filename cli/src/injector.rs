@@ -2,8 +2,8 @@
 
 use std::{io, time::Duration};
 
-use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
-use evdev::{AttributeSet, EventType, InputEvent, Key};
+use evdev::uinput::VirtualDevice;
+use evdev::{AttributeSet, EventType, InputEvent, KeyCode};
 
 use crate::{config::Config, keys, state::Stroke};
 
@@ -13,7 +13,7 @@ pub trait KeyOutput {
 
 impl KeyOutput for VirtualDevice {
     fn emit_key(&mut self, code: u16, value: i32) -> io::Result<()> {
-        self.emit(&[InputEvent::new(EventType::KEY, code, value)])
+        self.emit(&[InputEvent::new(EventType::KEY.0, code, value)])
     }
 }
 
@@ -24,11 +24,11 @@ pub struct Injector<T: KeyOutput = VirtualDevice> {
 
 impl Injector {
     pub fn new(name: &str) -> io::Result<Self> {
-        let mut set = AttributeSet::<Key>::new();
+        let mut set = AttributeSet::<KeyCode>::new();
         for code in 1..=255u16 {
-            set.insert(Key::new(code));
+            set.insert(KeyCode::new(code));
         }
-        let device = VirtualDeviceBuilder::new()?
+        let device = VirtualDevice::builder()?
             .name(name)
             .with_keys(&set)?
             .build()?;
@@ -54,6 +54,22 @@ impl<T: KeyOutput> Injector<T> {
             self.pressed.retain(|held| *held != code);
         }
         Ok(())
+    }
+
+    /// Переигрывает клавишу, перехваченную у композитора на время коррекции.
+    /// Повтор (2) не нужен: композитор повторяет сам; отпускание - только
+    /// для клавиш, нажатых здесь.
+    pub fn forward(&mut self, code: u16, value: i32) -> io::Result<()> {
+        match value {
+            1 => self.emit(code, 1),
+            0 if self.pressed.contains(&code) => self.emit(code, 0),
+            _ => Ok(()),
+        }
+    }
+
+    /// Держит ли виртуальная клавиатура нажатые клавиши.
+    pub fn holding(&self) -> bool {
+        !self.pressed.is_empty()
     }
 
     fn release_all(&mut self) -> io::Result<()> {

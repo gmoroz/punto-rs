@@ -9,10 +9,7 @@
     clippy::too_many_lines
 )]
 
-use evdev::{
-    AttributeSet, EventType, InputEvent, Key,
-    uinput::{VirtualDevice, VirtualDeviceBuilder},
-};
+use evdev::{AttributeSet, EventType, InputEvent, KeyCode as Key, uinput::VirtualDevice};
 use std::{
     collections::HashSet,
     sync::mpsc::{self, Receiver},
@@ -28,7 +25,7 @@ fn keyboard() -> VirtualDevice {
     for code in 1..=255 {
         keys.insert(Key::new(code));
     }
-    VirtualDeviceBuilder::new()
+    VirtualDevice::builder()
         .expect("нет доступа к /dev/uinput")
         .name("punto-rs e2e test keyboard")
         .with_keys(&keys)
@@ -37,7 +34,7 @@ fn keyboard() -> VirtualDevice {
         .unwrap()
 }
 fn key(kbd: &mut VirtualDevice, code: u16, value: i32) {
-    kbd.emit(&[InputEvent::new(EventType::KEY, code, value)])
+    kbd.emit(&[InputEvent::new(EventType::KEY.0, code, value)])
         .unwrap();
     thread::sleep(Duration::from_millis(15));
 }

@@ -227,3 +227,103 @@ fn abort_does_not_retain_old_or_interleaved_text() {
     h.key(1, 48, 0);
     assert!(h.fix().is_none());
 }
+
+/// «привет», набранное в EN: ghbdtn.
+const PRIVET_ON_EN: [u16; 6] = [34, 35, 48, 32, 20, 49];
+/// «hello» в EN.
+const HELLO: [u16; 5] = [35, 18, 38, 38, 24];
+
+impl Harness {
+    fn on_layout(layout: Option<Lang>) -> Self {
+        let mut h = Self::new();
+        h.event(DeviceEvent::Layout(layout));
+        h
+    }
+    fn type_codes(&mut self, codes: &[u16]) {
+        for &code in codes {
+            self.tap(code);
+        }
+    }
+}
+
+#[test]
+fn test_auto_wrong_word_then_space_schedules_word_with_space() {
+    let mut h = Harness::on_layout(Some(Lang::En));
+    h.type_codes(&PRIVET_ON_EN);
+    h.tap(keys::KEY_SPACE);
+    let fix = h.ready().unwrap();
+    assert!(fix.auto);
+    let codes: Vec<u16> = fix.strokes.iter().map(|stroke| stroke.code).collect();
+    assert_eq!(codes, [&PRIVET_ON_EN[..], &[keys::KEY_SPACE]].concat());
+}
+
+#[test]
+fn test_auto_right_word_unknown_layout_or_disabled_not_scheduled() {
+    let mut h = Harness::on_layout(Some(Lang::En));
+    h.type_codes(&HELLO);
+    h.tap(keys::KEY_SPACE);
+    assert!(h.ready().is_none());
+    let mut h = Harness::on_layout(None);
+    h.type_codes(&PRIVET_ON_EN);
+    h.tap(keys::KEY_SPACE);
+    assert!(h.ready().is_none());
+    let mut h = Harness::on_layout(Some(Lang::En));
+    h.cfg.auto_switch = false;
+    h.type_codes(&PRIVET_ON_EN);
+    h.tap(keys::KEY_SPACE);
+    assert!(h.ready().is_none());
+}
+
+#[test]
+fn test_auto_next_key_before_space_release_extends_fix() {
+    let mut h = Harness::on_layout(Some(Lang::En));
+    h.type_codes(&PRIVET_ON_EN);
+    h.key(1, keys::KEY_SPACE, 1);
+    h.key(1, 19, 1);
+    h.key(1, keys::KEY_SPACE, 0);
+    assert!(h.ready().is_none());
+    h.key(1, 19, 0);
+    let fix = h.ready().unwrap();
+    assert_eq!(fix.strokes.len(), PRIVET_ON_EN.len() + 2);
+    assert_eq!(fix.strokes.last().map(|stroke| stroke.code), Some(19));
+}
+
+#[test]
+fn test_auto_backspace_or_held_space_cancels_fix() {
+    let mut h = Harness::on_layout(Some(Lang::En));
+    h.type_codes(&PRIVET_ON_EN);
+    h.key(1, keys::KEY_SPACE, 1);
+    h.key(1, keys::KEY_SPACE, 2);
+    h.key(1, keys::KEY_SPACE, 0);
+    assert!(h.ready().is_none());
+    let mut h = Harness::on_layout(Some(Lang::En));
+    h.type_codes(&PRIVET_ON_EN);
+    h.key(1, keys::KEY_SPACE, 1);
+    h.tap(keys::KEY_BACKSPACE);
+    h.key(1, keys::KEY_SPACE, 0);
+    assert!(h.ready().is_none());
+}
+
+#[test]
+fn test_layout_event_new_layout_forgets_history_same_keeps_it() {
+    let mut h = Harness::on_layout(Some(Lang::En));
+    h.tap(30);
+    h.event(DeviceEvent::Layout(Some(Lang::En)));
+    assert!(h.fix().is_some());
+    h.tap(30);
+    h.event(DeviceEvent::Layout(Some(Lang::Ru)));
+    assert!(h.fix().is_none());
+}
+
+#[test]
+fn test_switched_toggles_layout_so_own_signal_keeps_history() {
+    let mut h = Harness::on_layout(Some(Lang::En));
+    h.type_codes(&PRIVET_ON_EN);
+    h.tap(keys::KEY_SPACE);
+    assert!(h.ready().is_some());
+    h.engine.switched();
+    h.event(DeviceEvent::Layout(Some(Lang::Ru)));
+    let undo = h.fix().unwrap();
+    assert!(!undo.auto);
+    assert_eq!(undo.strokes.len(), PRIVET_ON_EN.len() + 1);
+}

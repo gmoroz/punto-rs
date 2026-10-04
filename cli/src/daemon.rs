@@ -1,4 +1,4 @@
-//! Цикл демона: события устройств -> движок -> прерываемая коррекция.
+//! Цикл демона: события устройств -> движок -> коррекция под захватом клавиатур.
 
 use std::{
     io,
@@ -6,11 +6,12 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc::{Receiver, RecvTimeoutError, TryRecvError},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use crate::{
     config::Config,
+    devices::{Grab, Grabs},
     engine::{DeviceEvent, Engine},
     injector::{Injector, KeyOutput},
     session::SessionGuard,
@@ -22,6 +23,83 @@ const CONTROL_INTERVAL: Duration = Duration::from_millis(10);
 pub struct Message {
     pub generation: u64,
     pub event: DeviceEvent,
+    /// Время события по ядру: отделяет ввод до захвата клавиатур от ввода под ним.
+    pub at: SystemTime,
+}
+
+/// Ввод во время коррекции. Клавиатуры захвачены с `grabbed_at`: их нажатия
+/// не дошли до композитора и копятся в `queue`, чтобы переиграть их после.
+struct Capture<'a> {
+    rx: &'a Receiver<Message>,
+    guard: &'a SessionGuard,
+    stopped: &'a AtomicBool,
+    generation: u64,
+    grabbed_at: SystemTime,
+    queue: Vec<Message>,
+}
+
+impl Capture<'_> {
+    fn interrupted(&self) -> bool {
+        self.stopped.load(Ordering::Relaxed) || self.guard.context().generation != self.generation
+    }
+
+    /// Переигрывает перехваченный ввод через `injector`, скармливает его движку
+    /// и снимает `grab`. Захват держится, пока переигранные клавиши не отпущены:
+    /// отпускание под захватом иначе не дойдёт до композитора.
+    fn replay<T: KeyOutput>(
+        mut self,
+        grab: Grab,
+        injector: &mut Injector<T>,
+        engine: &mut Engine,
+        cfg: &Config,
+    ) -> io::Result<()> {
+        let mut queued = std::mem::take(&mut self.queue).into_iter();
+        loop {
+            let message = match queued.next() {
+                Some(message) => message,
+                None if !injector.holding() || self.interrupted() => break,
+                None => match self.rx.recv_timeout(CONTROL_INTERVAL) {
+                    Ok(message) => message,
+                    Err(RecvTimeoutError::Timeout) => continue,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                },
+            };
+            let captured = message.at >= self.grabbed_at;
+            self.deliver(message, captured, injector, engine, cfg)?;
+        }
+        drop(grab);
+        let released_at = SystemTime::now();
+        // Ввод под захватом, который поток устройства ещё не успел передать.
+        while let Ok(message) = self.rx.recv_timeout(CONTROL_INTERVAL) {
+            let captured = (self.grabbed_at..released_at).contains(&message.at);
+            self.deliver(message, captured, injector, engine, cfg)?;
+            if !captured {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Передаёт событие движку; `captured` - композитор его не видел, и
+    /// клавишу надо переиграть.
+    fn deliver<T: KeyOutput>(
+        &self,
+        message: Message,
+        captured: bool,
+        injector: &mut Injector<T>,
+        engine: &mut Engine,
+        cfg: &Config,
+    ) -> io::Result<()> {
+        if let (true, DeviceEvent::Key(key)) = (captured, &message.event) {
+            injector.forward(key.code, key.value)?;
+        }
+        if message.generation == self.generation {
+            engine.observe(message.event, cfg, Instant::now());
+        } else {
+            engine.discard(&message.event);
+        }
+        Ok(())
+    }
 }
 
 /// Главный цикл: копит ввод в движке и выполняет готовые коррекции.
@@ -32,6 +110,7 @@ pub fn run<T: KeyOutput>(
     cfg: &Config,
     verbose: bool,
     guard: &SessionGuard,
+    grabs: &Grabs,
     stopped: &AtomicBool,
 ) -> io::Result<()> {
     let mut engine = Engine::new(cfg, Instant::now());
@@ -80,41 +159,60 @@ pub fn run<T: KeyOutput>(
                 log!(
                     "punto-rs: исправляю {} нажатий ({})",
                     fix.strokes.len(),
-                    if fix.phrase {
-                        "фраза"
-                    } else {
-                        "слово"
+                    match (fix.auto, fix.phrase) {
+                        (true, _) => "авто",
+                        (false, true) => "фраза",
+                        (false, false) => "слово",
                     }
                 );
             }
-            let result = injector.fix(&fix.strokes, cfg, |delay| {
-                wait_for_input(rx, &mut engine, cfg, guard, generation, stopped, delay)
-            });
-            if let Err(err) = result {
-                engine.invalidate();
-                if err.kind() != io::ErrorKind::Interrupted {
-                    return Err(err);
+            let grabbed_at = SystemTime::now();
+            let grab = match grabs.grab() {
+                Ok(grab) => grab,
+                Err(err) => {
+                    log!("punto-rs: клавиатуры не захвачены, исправление пропущено: {err}");
+                    engine.invalidate();
+                    continue;
                 }
-                log!(
-                    "punto-rs: коррекция прервана; буфер сброшен, текст мог быть изменён частично"
-                );
+            };
+            let mut capture = Capture {
+                rx,
+                guard,
+                stopped,
+                generation,
+                grabbed_at,
+                queue: Vec::new(),
+            };
+            let result = injector.fix(&fix.strokes, cfg, |delay| {
+                wait_for_input(&mut capture, &mut engine, cfg, delay)
+            });
+            match result {
+                Ok(()) => engine.switched(),
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                    engine.invalidate();
+                    log!(
+                        "punto-rs: коррекция прервана; буфер сброшен, текст мог быть изменён частично"
+                    );
+                }
+                Err(err) => return Err(err),
             }
+            capture.replay(grab, &mut injector, &mut engine, cfg)?;
         }
     }
 }
 
+/// Ждёт `delay`, копя ввод под захватом в очередь. `Interrupted` - коррекцию
+/// надо прервать: ввод до захвата, клик, смена сессии или устройств, остановка.
 fn wait_for_input(
-    rx: &Receiver<Message>,
+    capture: &mut Capture,
     engine: &mut Engine,
     cfg: &Config,
-    guard: &SessionGuard,
-    generation: u64,
-    stopped: &AtomicBool,
     delay: Duration,
 ) -> io::Result<()> {
+    let rx = capture.rx;
     let deadline = Instant::now() + delay;
     loop {
-        if stopped.load(Ordering::Relaxed) || guard.context().generation != generation {
+        if capture.interrupted() {
             return Err(io::Error::new(
                 io::ErrorKind::Interrupted,
                 "завершение или смена сессии",
@@ -146,7 +244,14 @@ fn wait_for_input(
             }
         };
         if let Some(message) = message {
-            if message.generation == generation {
+            let captured = message.generation == capture.generation
+                && message.at >= capture.grabbed_at
+                && matches!(message.event, DeviceEvent::Key(_) | DeviceEvent::Layout(_));
+            if captured {
+                capture.queue.push(message);
+                continue;
+            }
+            if message.generation == capture.generation {
                 engine.during_fix(message.event, cfg, Instant::now());
             } else {
                 engine.discard(&message.event);
@@ -157,240 +262,4 @@ fn wait_for_input(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{engine::KeyEvent, keys};
-    use std::{
-        sync::{
-            Arc, Mutex,
-            mpsc::{self, SyncSender},
-        },
-        thread,
-    };
-    struct TestOutput {
-        events: Arc<Mutex<Vec<(u16, i32)>>>,
-        tx: SyncSender<Message>,
-        cancel_after: Option<usize>,
-        fail_after: Option<usize>,
-        stopped: Arc<AtomicBool>,
-    }
-    impl KeyOutput for TestOutput {
-        fn emit_key(&mut self, code: u16, value: i32) -> io::Result<()> {
-            let mut events = self.events.lock().unwrap();
-            events.push((code, value));
-            let count = events.len();
-            if self.cancel_after == Some(count) {
-                self.tx
-                    .send(Message {
-                        generation: 0,
-                        event: DeviceEvent::Click,
-                    })
-                    .unwrap();
-                for value in [1, 0] {
-                    self.tx
-                        .send(Message {
-                            generation: 0,
-                            event: DeviceEvent::Key(KeyEvent {
-                                device_id: 1,
-                                code: keys::KEY_INSERT,
-                                value,
-                            }),
-                        })
-                        .unwrap();
-                }
-            }
-            if self.fail_after == Some(count) {
-                return Err(io::Error::other("simulated write failure"));
-            }
-            if count == 8 {
-                self.stopped.store(true, Ordering::Relaxed);
-            }
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn event_loop_cancels_replay_and_does_not_reuse_aborted_buffer() {
-        let (events, result) = run_test(Some(1), None);
-        assert!(result.is_ok());
-        assert_eq!(events, vec![(14, 1), (14, 0)]);
-    }
-
-    #[test]
-    fn event_loop_exits_on_write_failure_after_releasing_key() {
-        let (events, result) = run_test(None, Some(1));
-        assert!(result.is_err());
-        assert_eq!(events, vec![(14, 1), (14, 0)]);
-    }
-
-    #[test]
-    fn event_loop_completes_exact_correction() {
-        let (events, result) = run_test(None, None);
-        assert!(result.is_ok());
-        assert_eq!(
-            events,
-            vec![
-                (14, 1),
-                (14, 0),
-                (125, 1),
-                (57, 1),
-                (57, 0),
-                (125, 0),
-                (30, 1),
-                (30, 0)
-            ]
-        );
-    }
-
-    fn run_test(
-        cancel_after: Option<usize>,
-        fail_after: Option<usize>,
-    ) -> (Vec<(u16, i32)>, io::Result<()>) {
-        let (tx, rx) = mpsc::sync_channel(32);
-        for code in [30, keys::KEY_INSERT] {
-            for value in [1, 0] {
-                tx.send(Message {
-                    generation: 0,
-                    event: DeviceEvent::Key(KeyEvent {
-                        device_id: 1,
-                        code,
-                        value,
-                    }),
-                })
-                .unwrap();
-            }
-        }
-        let stopped = Arc::new(AtomicBool::new(false));
-        let stop = stopped.clone();
-        let (finished_tx, finished_rx) = mpsc::channel();
-        let watchdog = thread::spawn(move || {
-            if finished_rx.recv_timeout(Duration::from_secs(2)).is_err() {
-                stop.store(true, Ordering::Relaxed);
-            }
-        });
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let injector = Injector::with_output(TestOutput {
-            events: events.clone(),
-            tx,
-            cancel_after,
-            fail_after,
-            stopped: stopped.clone(),
-        });
-        let cfg = Config {
-            session_guard: false,
-            key_delay_ms: 1,
-            post_backspace_ms: 0,
-            switch_delay_ms: 0,
-            ..Config::default()
-        };
-        let result = run(
-            &rx,
-            injector,
-            &cfg,
-            false,
-            &SessionGuard::new(false),
-            &stopped,
-        );
-        let _ = finished_tx.send(());
-        watchdog.join().unwrap();
-        let events = events.lock().unwrap().clone();
-        (events, result)
-    }
-
-    #[test]
-    fn new_input_interrupts_long_wait_immediately() {
-        let (tx, rx) = mpsc::sync_channel(1);
-        let cfg = Config {
-            session_guard: false,
-            ..Config::default()
-        };
-        let mut engine = Engine::new(&cfg, Instant::now());
-        let guard = SessionGuard::new(false);
-        tx.send(Message {
-            generation: 0,
-            event: DeviceEvent::Click,
-        })
-        .unwrap();
-        let started = Instant::now();
-        assert_eq!(
-            wait_for_input(
-                &rx,
-                &mut engine,
-                &cfg,
-                &guard,
-                0,
-                &AtomicBool::new(false),
-                Duration::from_secs(2)
-            )
-            .unwrap_err()
-            .kind(),
-            io::ErrorKind::Interrupted
-        );
-        assert!(started.elapsed() < Duration::from_secs(1));
-    }
-    #[test]
-    fn session_change_and_shutdown_cancel_before_next_key() {
-        let (_tx, rx) = mpsc::sync_channel(1);
-        let cfg = Config::default();
-        let guard = SessionGuard::new(true);
-        let mut engine = Engine::new(&cfg, Instant::now());
-        guard.set(Some("session".into()));
-        assert!(
-            wait_for_input(
-                &rx,
-                &mut engine,
-                &cfg,
-                &guard,
-                0,
-                &AtomicBool::new(false),
-                Duration::ZERO
-            )
-            .is_err()
-        );
-        assert!(
-            wait_for_input(
-                &rx,
-                &mut engine,
-                &cfg,
-                &guard,
-                1,
-                &AtomicBool::new(true),
-                Duration::ZERO
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn wait_for_input_closed_stream_or_stale_generation_interrupts() {
-        let cfg = Config {
-            session_guard: false,
-            ..Config::default()
-        };
-        let guard = SessionGuard::new(false);
-        let mut engine = Engine::new(&cfg, Instant::now());
-        let wait = |rx: &Receiver<Message>, engine: &mut Engine| {
-            wait_for_input(
-                rx,
-                engine,
-                &cfg,
-                &guard,
-                0,
-                &AtomicBool::new(false),
-                Duration::from_secs(2),
-            )
-            .unwrap_err()
-            .kind()
-        };
-        let (tx, rx) = mpsc::sync_channel(1);
-        drop(tx);
-        assert_eq!(wait(&rx, &mut engine), io::ErrorKind::Interrupted);
-        let (tx, rx) = mpsc::sync_channel(1);
-        tx.send(Message {
-            generation: 5,
-            event: DeviceEvent::Click,
-        })
-        .unwrap();
-        assert_eq!(wait(&rx, &mut engine), io::ErrorKind::Interrupted);
-    }
-}
+mod tests;

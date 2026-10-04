@@ -1,19 +1,23 @@
 //! Чтение устройств evdev: отбор клавиатур, поток событий и пересинхронизация.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     io,
+    os::fd::AsFd,
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::SyncSender,
     },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
-use evdev::{Device, EventType, InputEvent, Key, Synchronization, raw_stream::RawDevice};
+use evdev::{
+    Device, EventType, InputEvent, KeyCode as Key, SynchronizationCode as Synchronization,
+    raw_stream::RawDevice,
+};
 
 use crate::{
     VIRTUAL_NAME,
@@ -27,15 +31,69 @@ use crate::{
 const RESCAN_INTERVAL: Duration = Duration::from_secs(3);
 static NEXT_DEVICE_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Дубликаты fd слушаемых клавиатур по `device_id`. Дубликат - тот же открытый
+/// файл, что у читающего потока: захват через него отнимает ввод у композитора,
+/// но не у демона.
+#[derive(Clone, Default)]
+pub struct Grabs(Arc<Mutex<HashMap<u64, RawDevice>>>);
+
+impl Grabs {
+    fn devices(&self) -> MutexGuard<'_, HashMap<u64, RawDevice>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Захватывает все клавиатуры (EVIOCGRAB). Возвращает страж, который
+    /// отпускает захват при drop. Ошибка - клавиатура занята другим процессом
+    /// или на ней нажата клавиша; захват к этому моменту уже отпущен.
+    pub fn grab(&self) -> io::Result<Grab<'_>> {
+        let grab = Grab(self);
+        let mut devices = self.devices();
+        for device in devices.values_mut() {
+            device.grab()?;
+        }
+        // Нажатие до захвата видел композитор, а отпускание под захватом он
+        // не увидит: клавиша залипнет с автоповтором.
+        for device in devices.values() {
+            if device.get_key_state()?.iter().next().is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "клавиша ещё нажата",
+                ));
+            }
+        }
+        drop(devices);
+        Ok(grab)
+    }
+}
+
+/// Действующий захват клавиатур.
+pub struct Grab<'a>(&'a Grabs);
+
+impl Drop for Grab<'_> {
+    fn drop(&mut self) {
+        for device in self.0.devices().values_mut() {
+            if let Err(err) = device.ungrab() {
+                log!("punto-rs: не удалось отпустить клавиатуру: {err}");
+            }
+        }
+    }
+}
+
 /// Фоновый поток: раз в `RESCAN_INTERVAL` подключает новые устройства по конфигу,
-/// пока не выставлен `stopped`.
-pub fn watch(tx: SyncSender<Message>, cfg: &Config, guard: SessionGuard, stopped: Arc<AtomicBool>) {
+/// пока не выставлен `stopped`. Клавиатуры регистрируются в `grabs`.
+pub fn watch(
+    tx: SyncSender<Message>,
+    cfg: &Config,
+    guard: SessionGuard,
+    grabs: Grabs,
+    stopped: Arc<AtomicBool>,
+) {
     let watched = Arc::new(Mutex::new(HashSet::new()));
     let filter = cfg.devices.clone();
     let track_mouse = cfg.track_mouse;
     thread::spawn(move || {
         while !stopped.load(Ordering::Relaxed) {
-            attach_devices(&tx, &watched, &filter, track_mouse, &guard);
+            attach_devices(&tx, &watched, &filter, track_mouse, &guard, &grabs);
             thread::sleep(RESCAN_INTERVAL);
         }
     });
@@ -64,6 +122,7 @@ fn attach_devices(
     filter: &[String],
     track_mouse: bool,
     guard: &SessionGuard,
+    grabs: &Grabs,
 ) {
     for (path, device) in evdev::enumerate() {
         let name = device.name().unwrap_or_default().to_string();
@@ -86,8 +145,17 @@ fn attach_devices(
         if set.contains(&path) {
             continue;
         }
-        let raw = match RawDevice::open(&path) {
-            Ok(raw) => raw,
+        let opened = RawDevice::open(&path).and_then(|raw| {
+            let duplicate = match kind {
+                DeviceKind::Keyboard => {
+                    Some(RawDevice::from_fd(raw.as_fd().try_clone_to_owned()?)?)
+                }
+                DeviceKind::Pointer => None,
+            };
+            Ok((raw, duplicate))
+        });
+        let (raw, duplicate) = match opened {
+            Ok(opened) => opened,
             Err(err) => {
                 log!("punto-rs: не удалось открыть {}: {err}", path.display());
                 continue;
@@ -97,16 +165,22 @@ fn attach_devices(
         drop(set);
         log!("punto-rs: слушаю «{name}» ({})", path.display());
         let device_id = NEXT_DEVICE_ID.fetch_add(1, Ordering::Relaxed);
+        if let Some(duplicate) = duplicate {
+            grabs.devices().insert(device_id, duplicate);
+        }
         let tx = tx.clone();
         let watched = watched.clone();
         let guard = guard.clone();
+        let grabs = grabs.clone();
         thread::spawn(move || {
             if let Err(err) = read_device(raw, &tx, device_id, kind, &guard) {
                 log!("punto-rs: чтение «{name}» остановлено: {err}");
             }
+            grabs.devices().remove(&device_id);
             let _ = tx.send(Message {
                 generation: guard.context().generation,
                 event: DeviceEvent::Disconnected(device_id),
+                at: SystemTime::now(),
             });
             watched
                 .lock()
@@ -175,9 +249,13 @@ fn read_device(
     kind: DeviceKind,
     guard: &SessionGuard,
 ) -> io::Result<()> {
-    let send = |event, generation| {
-        tx.send(Message { generation, event })
-            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "поток событий закрыт"))
+    let send = |event, generation, at| {
+        tx.send(Message {
+            generation,
+            event,
+            at,
+        })
+        .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "поток событий закрыт"))
     };
     let resynced = |device: &RawDevice| -> io::Result<DeviceEvent> {
         let held_keys = if kind == DeviceKind::Keyboard {
@@ -190,27 +268,32 @@ fn read_device(
             held_keys,
         })
     };
-    send(resynced(&device)?, guard.context().generation)?;
+    send(
+        resynced(&device)?,
+        guard.context().generation,
+        SystemTime::now(),
+    )?;
     let mut stream = EventStream::default();
     loop {
         let generation = guard.context().generation;
         let events: Vec<_> = device.fetch_events()?.collect();
         for event in events {
+            let at = event.timestamp();
             match stream.observe(&event) {
                 StreamAction::Ignore => continue,
                 StreamAction::Lost => {
-                    send(DeviceEvent::LostEvents(device_id), generation)?;
+                    send(DeviceEvent::LostEvents(device_id), generation, at)?;
                     continue;
                 }
                 StreamAction::Resync => {
-                    send(resynced(&device)?, generation)?;
+                    send(resynced(&device)?, generation, at)?;
                     // Снимок учитывает и оставшуюся часть уже прочитанного пакета.
                     break;
                 }
                 StreamAction::Key => {}
             }
             if let Some(message) = key_message(&event, device_id, kind) {
-                send(message, generation)?;
+                send(message, generation, at)?;
             }
         }
     }
@@ -261,26 +344,26 @@ mod tests {
     fn dropped_events_are_ignored_until_report() {
         let mut stream = EventStream::default();
         assert_eq!(
-            stream.observe(&InputEvent::new(EventType::SYNCHRONIZATION, 3, 0)),
+            stream.observe(&InputEvent::new(EventType::SYNCHRONIZATION.0, 3, 0)),
             StreamAction::Lost
         );
         assert_eq!(
-            stream.observe(&InputEvent::new(EventType::KEY, 30, 1)),
+            stream.observe(&InputEvent::new(EventType::KEY.0, 30, 1)),
             StreamAction::Ignore
         );
         assert_eq!(
-            stream.observe(&InputEvent::new(EventType::SYNCHRONIZATION, 0, 0)),
+            stream.observe(&InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0)),
             StreamAction::Resync
         );
         assert_eq!(
-            stream.observe(&InputEvent::new(EventType::KEY, 30, 0)),
+            stream.observe(&InputEvent::new(EventType::KEY.0, 30, 0)),
             StreamAction::Key
         );
     }
 
     #[test]
     fn key_message_keyboard_and_pointer_events_map_to_engine_input() {
-        let key = |code, value| InputEvent::new(EventType::KEY, code, value);
+        let key = |code, value| InputEvent::new(EventType::KEY.0, code, value);
         assert!(matches!(
             key_message(&key(30, 1), 7, DeviceKind::Keyboard),
             Some(DeviceEvent::Key(KeyEvent {

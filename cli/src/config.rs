@@ -18,6 +18,7 @@ pub struct Config {
     pub track_mouse: bool,
     pub session_guard: bool,
     pub buffer_timeout_ms: u64,
+    pub auto_switch: bool,
 }
 
 impl Default for Config {
@@ -35,6 +36,7 @@ impl Default for Config {
             track_mouse: true,
             session_guard: true,
             buffer_timeout_ms: 30_000,
+            auto_switch: true,
         }
     }
 }
@@ -88,6 +90,7 @@ impl Config {
                     .is_some(),
                 "track-mouse" => assign_bool(value, &mut cfg.track_mouse),
                 "session-guard" => assign_bool(value, &mut cfg.session_guard),
+                "auto-switch" => assign_bool(value, &mut cfg.auto_switch),
                 "devices" => {
                     cfg.devices = value
                         .split(',')
@@ -176,6 +179,8 @@ mod tests {
         assert_eq!(cfg.hotkey, Config::default().hotkey);
         assert_eq!(cfg.pause_hotkey, Config::default().pause_hotkey);
         assert!(cfg.session_guard);
+        assert!(cfg.auto_switch);
+        assert!(!Config::parse("auto-switch=no").unwrap().auto_switch);
     }
 
     #[test]

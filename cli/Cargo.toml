@@ -12,7 +12,7 @@ categories = ["command-line-utilities"]
 publish = false
 
 [dependencies]
-evdev = "=0.12.2"
+evdev = "=0.13.2"
 dbus = { version = "=0.9.12", features = ["vendored"] }
 libc = "=0.2.189"
 signal-hook = "=0.3.18"

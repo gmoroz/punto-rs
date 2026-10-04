@@ -23,7 +23,9 @@ mod devices;
 mod engine;
 mod injector;
 mod instance;
+mod kde;
 mod keys;
+mod layout;
 mod session;
 mod state;
 
@@ -120,6 +122,12 @@ fn main() {
         say!("punto-rs: конфиг корректен");
         return;
     }
+    serve(&cfg, verbose);
+}
+
+/// Запуск демона: блокировка экземпляра, потоки сессии, раскладки и устройств,
+/// главный цикл до сигнала завершения.
+fn serve(cfg: &Config, verbose: bool) {
     let runtime = xdg_dir("XDG_RUNTIME_DIR")
         .unwrap_or_else(|| die("XDG_RUNTIME_DIR не задан: запускайте в пользовательской сессии"));
     let _instance = InstanceLock::acquire(&runtime.join("punto-rs"))
@@ -148,7 +156,10 @@ fn main() {
         log!("punto-rs: session-guard=no — блокировка экрана и смена сессии не отслеживаются");
     }
     let (tx, rx) = mpsc::sync_channel::<Message>(1024);
-    devices::watch(tx, &cfg, guard.clone(), stopped.clone());
+    let grabs = devices::Grabs::default();
+    let session_bus = dbus::blocking::Connection::new_session;
+    kde::watch(cfg, session_bus, tx.clone(), guard.clone(), stopped.clone());
+    devices::watch(tx, cfg, guard.clone(), grabs.clone(), stopped.clone());
     log!(
         "punto-rs {} запущен: слово {:?}, фраза {:?}, пауза {:?}",
         env!("CARGO_PKG_VERSION"),
@@ -156,7 +167,7 @@ fn main() {
         cfg.phrase_hotkey,
         cfg.pause_hotkey
     );
-    if let Err(err) = daemon::run(&rx, injector, &cfg, verbose, &guard, &stopped) {
+    if let Err(err) = daemon::run(&rx, injector, cfg, verbose, &guard, &grabs, &stopped) {
         log!("punto-rs: инжект остановлен после ошибки: {err}");
         std::process::exit(1);
     }

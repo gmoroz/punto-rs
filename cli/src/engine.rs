@@ -8,6 +8,7 @@ use std::{
 use crate::{
     config::Config,
     keys,
+    layout::{self, Lang},
     state::{Buffer, Stroke},
 };
 
@@ -20,12 +21,17 @@ pub struct KeyEvent {
 
 #[derive(Debug)]
 pub enum DeviceEvent {
-    Resynced { device_id: u64, held_keys: Vec<u16> },
+    Resynced {
+        device_id: u64,
+        held_keys: Vec<u16>,
+    },
     Key(KeyEvent),
     Click,
     Disconnected(u64),
     Session(Option<String>),
     LostEvents(u64),
+    /// Активная раскладка; `None` - неизвестна или не пара EN/RU.
+    Layout(Option<Lang>),
 }
 
 #[derive(Default)]
@@ -76,6 +82,8 @@ impl HeldKeys {
 pub struct PendingFix {
     pub strokes: Vec<Stroke>,
     pub phrase: bool,
+    /// Найдено детектором на пробеле, а не по хоткею.
+    pub auto: bool,
     trigger: u16,
     ready_at: Option<Instant>,
 }
@@ -88,6 +96,7 @@ pub struct Engine {
     session: Option<String>,
     last_input: Instant,
     unsynced: HashSet<u64>,
+    layout: Option<Lang>,
 }
 
 impl Engine {
@@ -100,6 +109,36 @@ impl Engine {
             session: (!cfg.session_guard).then(|| "unguarded".to_string()),
             last_input: now,
             unsynced: HashSet::new(),
+            layout: None,
+        }
+    }
+
+    /// Коррекция переключила раскладку хоткеем: при двух раскладках - на другую.
+    /// Сигнал KDE о той же смене после этого не сбрасывает буфер.
+    pub fn switched(&mut self) {
+        self.layout = self.layout.map(Lang::other);
+    }
+
+    /// Пробел после слова в чужой раскладке -> автоматическая коррекция слова с пробелом.
+    fn check_last_word(&mut self, cfg: &Config) {
+        let Some(shown) = self.layout.filter(|_| cfg.auto_switch) else {
+            return;
+        };
+        let word = self.buffer.last_word();
+        let letters: Vec<(u16, bool)> = word
+            .iter()
+            .take_while(|stroke| !keys::is_separator(stroke.code))
+            .map(|stroke| (stroke.code, stroke.shift))
+            .collect();
+        // Ровно один пробел после слова: второй пробел слово уже не трогает.
+        if word.len() == letters.len() + 1 && layout::wrong_layout(&letters, shown) {
+            self.pending = Some(PendingFix {
+                strokes: word.to_vec(),
+                phrase: false,
+                auto: true,
+                trigger: keys::KEY_SPACE,
+                ready_at: None,
+            });
         }
     }
 
@@ -127,12 +166,48 @@ impl Engine {
         }
     }
 
+    /// Клавиша, пока коррекция ждёт отпускания всех клавиш.
+    fn observe_pending(&mut self, event: &KeyEvent, now: Instant) {
+        let Some(pending) = &mut self.pending else {
+            return;
+        };
+        // Следующее слово, начатое до отпускания пробела, уже на экране в той же
+        // чужой раскладке: перенабирается вместе с исправляемым.
+        let typed =
+            !self.held.command() && (keys::is_char(event.code) || keys::is_separator(event.code));
+        if pending.auto && event.value == 1 && (typed || keys::is_shift(event.code)) {
+            if typed {
+                let shift = self.held.shift();
+                self.buffer.push(event.code, shift);
+                pending.strokes.push(Stroke {
+                    code: event.code,
+                    shift,
+                });
+            }
+            pending.ready_at = None;
+            self.last_input = now;
+        } else if event.value == 1
+            || (event.value == 2 && (pending.auto || event.code != pending.trigger))
+        {
+            self.invalidate();
+        } else if self.held.keys.is_empty() {
+            pending.ready_at = Some(now + Duration::from_millis(30));
+        }
+    }
+
     pub fn observe(&mut self, event: DeviceEvent, cfg: &Config, now: Instant) {
         self.expire(cfg, now);
         self.observe_device_state(&event);
         if let DeviceEvent::Session(session) = event {
             self.session = session;
             self.invalidate();
+            return;
+        }
+        if let DeviceEvent::Layout(layout) = event {
+            if self.layout != layout {
+                self.layout = layout;
+                self.invalidate();
+            }
             return;
         }
         let DeviceEvent::Key(event) = event else {
@@ -151,12 +226,8 @@ impl Engine {
             self.invalidate();
             return;
         }
-        if let Some(pending) = &mut self.pending {
-            if event.value == 1 || (event.value == 2 && event.code != pending.trigger) {
-                self.invalidate();
-            } else if self.held.keys.is_empty() {
-                pending.ready_at = Some(now + Duration::from_millis(30));
-            }
+        if self.pending.is_some() {
+            self.observe_pending(&event, now);
             return;
         }
         if event.value == 0 {
@@ -187,6 +258,7 @@ impl Engine {
                 self.pending = Some(PendingFix {
                     strokes: strokes.to_vec(),
                     phrase,
+                    auto: false,
                     trigger: event.code,
                     ready_at: None,
                 });
@@ -208,6 +280,9 @@ impl Engine {
             self.invalidate();
         } else if keys::is_char(event.code) || keys::is_separator(event.code) {
             self.buffer.push(event.code, self.held.shift());
+            if event.code == keys::KEY_SPACE {
+                self.check_last_word(cfg);
+            }
         } else {
             self.invalidate();
         }
@@ -229,6 +304,10 @@ impl Engine {
 
     pub fn discard(&mut self, event: &DeviceEvent) {
         self.observe_device_state(event);
+        // Раскладка - не ввод: её смена в старом поколении сессии всё равно действует.
+        if let DeviceEvent::Layout(layout) = event {
+            self.layout = *layout;
+        }
         self.invalidate();
     }
 
