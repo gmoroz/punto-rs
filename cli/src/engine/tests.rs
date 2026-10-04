@@ -276,6 +276,21 @@ fn test_auto_single_letter_alone_kept_before_fixed_word_joins_fix() {
 }
 
 #[test]
+fn test_auto_exception_short_word_before_fix_not_joined() {
+    // «ру пше» в RU: «пше» -> git исправляется, «ру» из исключений не цепляется.
+    const RU_ON_RU: [u16; 2] = [35, 18];
+    const GIT_ON_RU: [u16; 3] = [34, 23, 20];
+    let mut h = Harness::on_layout(Some(Lang::Ru));
+    h.type_codes(&RU_ON_RU);
+    h.tap(keys::KEY_SPACE);
+    assert!(h.ready().is_none());
+    h.type_codes(&GIT_ON_RU);
+    h.tap(keys::KEY_SPACE);
+    let codes: Vec<u16> = h.ready().unwrap().strokes.iter().map(|s| s.code).collect();
+    assert_eq!(codes, [&GIT_ON_RU[..], &[keys::KEY_SPACE]].concat());
+}
+
+#[test]
 fn test_auto_right_word_unknown_layout_or_disabled_not_scheduled() {
     let mut h = Harness::on_layout(Some(Lang::En));
     h.type_codes(&HELLO);

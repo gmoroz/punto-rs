@@ -227,9 +227,16 @@ pub fn scores(keys: &[(u16, bool)], shown: Lang) -> Option<Scores> {
     })
 }
 
+/// Слова живой речи/термины, которые детектор ошибочно считает чужой раскладкой.
+/// Пополнять скриптом по корпусу, не руками: см. `layout/AGENTS.md`.
+const EXCEPTIONS: &str = include_str!("layout/exceptions.txt");
+
 /// Решает, набрано ли слово не в той раскладке.
 /// `shown` - раскладка, в которой слово сейчас на экране.
 pub fn wrong_layout(keys: &[(u16, bool)], shown: Lang) -> bool {
+    if is_exception(keys, shown) {
+        return false;
+    }
     scores(keys, shown).is_some_and(|scores| scores.should_switch(MIN_MARGIN, MAX_ALT_COST))
         // Одна буква сама не исправляется: `f`/`а`, `d`/`в` одинаково возможны.
         || (keys.len() == 2 && short_wrong(keys, shown) && !shown_known(keys, shown))
@@ -271,6 +278,9 @@ fn shown_known(keys: &[(u16, bool)], shown: Lang) -> bool {
 /// частое слово из списка, а на экране - нет. Для одной буквы признак слабый,
 /// и движок применяет его только перед словом, которое исправляется.
 pub fn short_wrong(keys: &[(u16, bool)], shown: Lang) -> bool {
+    if is_exception(keys, shown) {
+        return false;
+    }
     let short = |lang: Lang| {
         let words: &[&str] = match lang {
             Lang::En => &EN_SHORT,
@@ -279,6 +289,26 @@ pub fn short_wrong(keys: &[(u16, bool)], shown: Lang) -> bool {
         lowercase(lang, keys).is_some_and(|text| words.contains(&text.as_str()))
     };
     keys.len() <= 2 && short(shown.other()) && !short(shown)
+}
+
+/// Буквы слова без пунктуации по краям (текст уже в нижнем регистре, `ё` -> `е`).
+fn word_core(text: &str) -> Option<&str> {
+    let is_letter = |ch: char| ch.is_ascii_lowercase() || ('а'..='я').contains(&ch);
+    let start = text.find(is_letter)?;
+    let end = text
+        .char_indices()
+        .rev()
+        .find(|&(_, ch)| is_letter(ch))
+        .map(|(index, ch)| index + ch.len_utf8())?;
+    Some(&text[start..end])
+}
+
+/// Слово из списка исключений: регистр и краевая пунктуация не важны.
+fn is_exception(keys: &[(u16, bool)], shown: Lang) -> bool {
+    lowercase(shown, keys)
+        .as_deref()
+        .and_then(word_core)
+        .is_some_and(|word| EXCEPTIONS.lines().any(|line| line == word))
 }
 
 // Явный путь: модуль подключают и через `#[path]` из `examples/`.

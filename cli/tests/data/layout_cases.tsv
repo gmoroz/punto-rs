@@ -1198,3 +1198,15 @@ dev	short_wrong	ru	м	fix
 test	short_wrong	ru	и	fix
 dev	short_wrong	ru	ву	fix
 test	short_wrong	ru	г	fix
+dev	ru_wrong	en	lfdfq	fix
+test	ru_wrong	en	cltkfnm	fix
+dev	ru_wrong	en	abkmnhs	fix
+test	ru_wrong	en	jnghfdbk	fix
+dev	ru_wrong	en	ltkfq	fix
+test	ru_wrong	en	xbnfq	fix
+dev	ru_wrong	en	ufcb	fix
+test	ru_wrong	en	ghjdthzq	fix
+dev	ru_wrong	en	nj;t	fix
+test	ru_wrong	en	dcnfk	fix
+dev	en_wrong	ru	зщц	fix
+test	short_wrong	ru	пщ	fix

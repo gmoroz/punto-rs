@@ -102,3 +102,29 @@ fn test_known_dictionary_word_found_gibberish_not() {
     assert!(known(Lang::En, &letters(Lang::En, "hello")));
     assert!(!known(Lang::Ru, &letters(Lang::Ru, "ршщзх")));
 }
+
+#[test]
+fn test_wrong_layout_exception_word_not_switched() {
+    // Живая речь и термины из exceptions.txt: на экране оставляем.
+    assert!(!wrong_layout(&keys_for(Lang::Ru, "афк"), Lang::Ru));
+    assert!(!wrong_layout(&keys_for(Lang::Ru, "ща"), Lang::Ru));
+    assert!(!wrong_layout(&keys_for(Lang::Ru, "Ща"), Lang::Ru));
+    assert!(!wrong_layout(&keys_for(Lang::Ru, "ща,"), Lang::Ru));
+    assert!(!wrong_layout(&keys_for(Lang::Ru, "ру"), Lang::Ru));
+    assert!(!wrong_layout(&keys_for(Lang::En, "tls"), Lang::En));
+    assert!(!wrong_layout(&keys_for(Lang::En, "TLS"), Lang::En));
+    assert!(!short_wrong(&keys_for(Lang::Ru, "ру"), Lang::Ru));
+    assert!(!short_wrong(&keys_for(Lang::Ru, "ин"), Lang::Ru));
+}
+
+#[test]
+fn test_wrong_layout_typo_still_switched_despite_exceptions() {
+    // Настоящие опечатки раскладки исключениями не стали.
+    assert!(wrong_layout(&keys_for(Lang::En, "ghbdtn"), Lang::En));
+    assert!(wrong_layout(&keys_for(Lang::En, "nfr"), Lang::En));
+    assert!(wrong_layout(&keys_for(Lang::En, "xnj"), Lang::En));
+    assert!(wrong_layout(&keys_for(Lang::Ru, "пше"), Lang::Ru));
+    assert!(wrong_layout(&keys_for(Lang::Ru, "пщ"), Lang::Ru));
+    assert!(wrong_layout(&keys_for(Lang::En, "jy"), Lang::En));
+    assert!(wrong_layout(&keys_for(Lang::En, "negb"), Lang::En));
+}
