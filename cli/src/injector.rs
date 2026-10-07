@@ -155,8 +155,9 @@ impl<T: KeyOutput> Injector<T> {
             Ok(())
         })();
         if let Err(err) = self.release_all() {
-            return Err(io::Error::other(format!(
-                "не удалось отпустить синтетические клавиши: {err}"
+            return Err(io::Error::other(tr!(
+                format!("не удалось отпустить синтетические клавиши: {err}"),
+                format!("не вдалося відпустити синтетичні клавіші: {err}")
             )));
         }
         result

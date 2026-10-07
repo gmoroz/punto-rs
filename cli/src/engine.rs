@@ -8,7 +8,7 @@ use std::{
 use crate::{
     config::Config,
     keys,
-    layout::{self, Lang},
+    layout::{self, Pair},
     state::{Buffer, Stroke},
 };
 
@@ -30,8 +30,8 @@ pub enum DeviceEvent {
     Disconnected(u64),
     Session(Option<String>),
     LostEvents(u64),
-    /// Активная раскладка; `None` - неизвестна или не пара EN/RU.
-    Layout(Option<Lang>),
+    /// Пара раскладок с активной; `None` - неизвестна или не EN/RU, EN/UK.
+    Layout(Option<Pair>),
 }
 
 #[derive(Default)]
@@ -81,7 +81,7 @@ impl HeldKeys {
 
 /// Начало исправления слова с `start`: короткие слова перед ним через один
 /// пробел в той же чужой раскладке (`F jy` -> `А он`) исправляются вместе с ним.
-fn short_words_before(phrase: &[Stroke], mut start: usize, shown: Lang) -> usize {
+fn short_words_before(phrase: &[Stroke], mut start: usize, pair: Pair) -> usize {
     while start >= 2 && phrase[start - 1].code == keys::KEY_SPACE {
         let end = start - 1;
         let begin = phrase[..end]
@@ -92,7 +92,7 @@ fn short_words_before(phrase: &[Stroke], mut start: usize, shown: Lang) -> usize
             .iter()
             .map(|stroke| (stroke.code, stroke.shift))
             .collect();
-        if letters.is_empty() || !layout::short_wrong(&letters, shown) {
+        if letters.is_empty() || !layout::short_wrong(&letters, pair) {
             break;
         }
         start = begin;
@@ -117,7 +117,7 @@ pub struct Engine {
     session: Option<String>,
     last_input: Instant,
     unsynced: HashSet<u64>,
-    layout: Option<Lang>,
+    layout: Option<Pair>,
 }
 
 impl Engine {
@@ -137,12 +137,12 @@ impl Engine {
     /// Коррекция переключила раскладку хоткеем: при двух раскладках - на другую.
     /// Сигнал KDE о той же смене после этого не сбрасывает буфер.
     pub fn switched(&mut self) {
-        self.layout = self.layout.map(Lang::other);
+        self.layout = self.layout.map(Pair::swapped);
     }
 
     /// Пробел после слова в чужой раскладке -> автоматическая коррекция слова с пробелом.
     fn check_last_word(&mut self, cfg: &Config) {
-        let Some(shown) = self.layout.filter(|_| cfg.auto_switch) else {
+        let Some(pair) = self.layout.filter(|_| cfg.auto_switch) else {
             return;
         };
         let word = self.buffer.last_word();
@@ -152,9 +152,9 @@ impl Engine {
             .map(|stroke| (stroke.code, stroke.shift))
             .collect();
         // Ровно один пробел после слова: второй пробел слово уже не трогает.
-        if word.len() == letters.len() + 1 && layout::wrong_layout(&letters, shown) {
+        if word.len() == letters.len() + 1 && layout::wrong_layout(&letters, pair) {
             let phrase = self.buffer.phrase();
-            let start = short_words_before(phrase, phrase.len() - word.len(), shown);
+            let start = short_words_before(phrase, phrase.len() - word.len(), pair);
             self.pending = Some(PendingFix {
                 strokes: phrase[start..].to_vec(),
                 phrase: false,

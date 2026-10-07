@@ -256,7 +256,10 @@ fn test_wait_for_input_switch_pause_ends_on_new_layout_signal() {
     let (tx, rx) = mpsc::sync_channel(1);
     tx.send(Message {
         generation: 0,
-        event: DeviceEvent::Layout(Some(crate::layout::Lang::Ru)),
+        event: DeviceEvent::Layout(Some(crate::layout::Pair::new(
+            crate::layout::Lang::Ru,
+            crate::layout::Lang::En,
+        ))),
         at: SystemTime::now() + Duration::from_secs(60),
     })
     .unwrap();

@@ -13,3 +13,11 @@ forms are stored as a Bloom filter and a letter trigram model in
 `src/layout/ru.{bloom,bin}`, rebuilt by `scripts/build_layout_model.sh`. Its
 license is in `hunspell-ru-LICENSE`. The English word list is
 `/usr/share/dict/words` (public domain).
+
+The Ukrainian model in `src/layout/uk.{bloom,bin}` is built by
+`scripts/build_uk_model.sh` from the Ukrainian hunspell dictionary
+(`hunspell-uk`, dict_uk project by Andriy Rysin et al., triple-licensed
+MPL-1.1 / LGPL-2.1+ / GPL-2+, used here under MPL-1.1) and from the words of
+the hermitdave/FrequencyWords Ukrainian list (OpenSubtitles 2018,
+CC BY-SA 4.0) that the same dictionary accepts. Both are stored only as a Bloom
+filter and a letter trigram model.

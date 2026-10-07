@@ -66,7 +66,10 @@ impl SessionGuard {
         while !stopped.load(Ordering::Relaxed) {
             if let Err(err) = self.watch(stopped) {
                 self.invalidate();
-                log!("punto-rs: проверка сессии недоступна, коррекция приостановлена: {err}");
+                tr!(
+                    log!("punto-rs: проверка сессии недоступна, коррекция приостановлена: {err}"),
+                    log!("punto-rs: перевірка сеансу недоступна, виправлення призупинено: {err}")
+                );
                 for _ in 0..30 {
                     if stopped.load(Ordering::Relaxed) {
                         return;
@@ -152,8 +155,12 @@ fn snapshot(connection: &Connection) -> Result<Option<String>, dbus::Error> {
     let properties = session.get_all("org.freedesktop.login1.Session")?;
     let string = |name: &str| properties.get(name).and_then(|v| v.0.as_str());
     let boolean = |name: &str| properties.get(name).and_then(|v| v.0.as_i64());
-    let uid = crate::instance::process_uid()
-        .map_err(|err| dbus::Error::new_failed(&format!("uid процесса: {err}")))?;
+    let uid = crate::instance::process_uid().map_err(|err| {
+        dbus::Error::new_failed(&tr!(
+            format!("uid процесса: {err}"),
+            format!("uid процесу: {err}")
+        ))
+    })?;
     let allowed = session_owner(&properties) == Some(u64::from(uid))
         && allowed_session(
             string("Type"),

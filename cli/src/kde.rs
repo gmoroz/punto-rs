@@ -13,7 +13,11 @@ use std::{
 use dbus::{blocking::Connection, message::MatchRule};
 
 use crate::{
-    config::Config, daemon::Message, engine::DeviceEvent, layout::Lang, session::SessionGuard,
+    config::Config,
+    daemon::Message,
+    engine::DeviceEvent,
+    layout::{Lang, Pair},
+    session::SessionGuard,
 };
 
 const SERVICE: &str = "org.kde.keyboard";
@@ -21,19 +25,33 @@ const INTERFACE: &str = "org.kde.KeyboardLayouts";
 const TIMEOUT: Duration = Duration::from_millis(500);
 const RETRY: Duration = Duration::from_secs(3);
 
-/// Раскладка с индексом `index` из списка KDE (короткое имя, вариант, название).
-/// Только пара us+ru: при других наборах хоткей переключения может увести
-/// не в ту раскладку, и автоисправление выключается (`None`).
-fn lang_at(layouts: &[(String, String, String)], index: u32) -> Option<Lang> {
-    let names: Vec<&str> = layouts.iter().map(|(short, _, _)| short.as_str()).collect();
-    let mut sorted = names.clone();
-    sorted.sort_unstable();
-    if sorted != ["ru", "us"] {
-        return None;
+/// Второй язык пары с `us` по короткому имени и варианту раскладки KDE.
+/// Для `ua` годятся только варианты с раскладкой клавиш `ua(unicode)`.
+fn second_lang(short: &str, variant: &str) -> Option<Lang> {
+    match (short, variant) {
+        ("ru", _) => Some(Lang::Ru),
+        ("ua", "" | "unicode" | "legacy") => Some(Lang::Uk),
+        _ => None,
     }
-    match *names.get(usize::try_from(index).ok()?)? {
-        "us" => Some(Lang::En),
-        _ => Some(Lang::Ru),
+}
+
+/// Пара раскладок с активной `index` из списка KDE (короткое имя, вариант,
+/// название). Только us+ru или us+ua: при других наборах хоткей переключения
+/// может увести не в ту раскладку, и автоисправление выключается (`None`).
+fn lang_at(layouts: &[(String, String, String)], index: u32) -> Option<Pair> {
+    let [first, second] = layouts else {
+        return None;
+    };
+    let (us_first, (short, variant, _)) = match (first.0.as_str(), second.0.as_str()) {
+        ("us", _) => (true, second),
+        (_, "us") => (false, first),
+        _ => return None,
+    };
+    let pair = Pair::new(Lang::En, second_lang(short, variant)?);
+    match (index, us_first) {
+        (0, true) | (1, false) => Some(pair),
+        (0 | 1, _) => Some(pair.swapped()),
+        _ => None,
     }
 }
 
@@ -67,9 +85,10 @@ pub fn watch(
                 .map(|err| err.to_string());
             // Без KDE ошибка повторяется на каждой попытке: в журнал - только новая.
             if error.is_some() && error != last_error {
-                log!(
-                    "punto-rs: раскладка KDE недоступна, автоисправление выключено: {}",
-                    error.as_deref().unwrap_or_default()
+                let error = error.as_deref().unwrap_or_default();
+                tr!(
+                    log!("punto-rs: раскладка KDE недоступна, автоисправление выключено: {error}"),
+                    log!("punto-rs: розкладка KDE недоступна, автовиправлення вимкнено: {error}")
                 );
             }
             last_error = error;
@@ -83,7 +102,7 @@ pub fn watch(
 
 fn follow(
     connection: &Connection,
-    send: &impl Fn(Option<Lang>) -> bool,
+    send: &impl Fn(Option<Pair>) -> bool,
     stopped: &AtomicBool,
 ) -> Result<(), dbus::Error> {
     let changed = Arc::new(AtomicBool::new(true));
@@ -131,9 +150,29 @@ mod tests {
 
     #[test]
     fn test_lang_at_us_ru_pair_maps_index_to_lang() {
-        assert_eq!(lang_at(&layouts(&["us", "ru"]), 0), Some(Lang::En));
-        assert_eq!(lang_at(&layouts(&["us", "ru"]), 1), Some(Lang::Ru));
-        assert_eq!(lang_at(&layouts(&["ru", "us"]), 1), Some(Lang::En));
+        assert_eq!(lang_at(&layouts(&["us", "ru"]), 0), Some(EN_RU));
+        assert_eq!(lang_at(&layouts(&["us", "ru"]), 1), Some(EN_RU.swapped()));
+        assert_eq!(lang_at(&layouts(&["ru", "us"]), 1), Some(EN_RU));
+    }
+
+    const EN_RU: Pair = Pair::new(Lang::En, Lang::Ru);
+    const EN_UK: Pair = Pair::new(Lang::En, Lang::Uk);
+
+    #[test]
+    fn test_lang_at_us_ua_pair_with_unicode_variants_only() {
+        let variant = |name: &str| {
+            vec![
+                ("us".to_string(), String::new(), String::new()),
+                ("ua".to_string(), name.to_string(), String::new()),
+            ]
+        };
+        assert_eq!(lang_at(&layouts(&["us", "ua"]), 0), Some(EN_UK));
+        assert_eq!(lang_at(&layouts(&["us", "ua"]), 1), Some(EN_UK.swapped()));
+        assert_eq!(lang_at(&layouts(&["ua", "us"]), 0), Some(EN_UK.swapped()));
+        assert_eq!(lang_at(&variant("legacy"), 1), Some(EN_UK.swapped()));
+        assert_eq!(lang_at(&variant("winkeys"), 0), None);
+        assert_eq!(lang_at(&variant("phonetic"), 0), None);
+        assert_eq!(lang_at(&layouts(&["ru", "ua"]), 0), None);
     }
 
     /// Приватная шина: `dbus-daemon` на время теста, убивается при drop.
@@ -229,11 +268,15 @@ mod tests {
             DeviceEvent::Layout(layout) => layout,
             _ => panic!("ожидалась раскладка"),
         };
-        assert_eq!(next(), Some(Lang::En));
+        assert_eq!(next(), Some(EN_RU));
         commands
             .send(("layoutChanged", vec!["us", "ru"], 1))
             .unwrap();
-        assert_eq!(next(), Some(Lang::Ru));
+        assert_eq!(next(), Some(EN_RU.swapped()));
+        commands
+            .send(("layoutListChanged", vec!["us", "ua"], 0))
+            .unwrap();
+        assert_eq!(next(), Some(EN_UK));
         commands
             .send(("layoutListChanged", vec!["us", "ru", "de"], 1))
             .unwrap();

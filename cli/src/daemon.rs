@@ -140,9 +140,12 @@ pub fn run<T: KeyOutput>(
             log!(
                 "punto-rs: {}",
                 if context.session.is_some() {
-                    "локальная сессия доступна"
+                    tr!("локальная сессия доступна", "локальний сеанс доступний")
                 } else {
-                    "коррекция приостановлена: сессия недоступна или заблокирована"
+                    tr!(
+                        "коррекция приостановлена: сессия недоступна или заблокирована",
+                        "виправлення призупинено: сеанс недоступний або заблокований"
+                    )
                 }
             );
             engine.observe(DeviceEvent::Session(context.session), cfg, Instant::now());
@@ -159,9 +162,9 @@ pub fn run<T: KeyOutput>(
                     log!(
                         "punto-rs: {}",
                         if engine.paused {
-                            "пауза включена"
+                            tr!("пауза включена", "паузу ввімкнено")
                         } else {
-                            "пауза выключена"
+                            tr!("пауза выключена", "паузу вимкнено")
                         }
                     );
                 }
@@ -171,21 +174,25 @@ pub fn run<T: KeyOutput>(
         }
         if let Some(fix) = engine.take_ready(cfg, Instant::now()) {
             if verbose {
-                log!(
-                    "punto-rs: исправляю {} нажатий ({})",
-                    fix.strokes.len(),
-                    match (fix.auto, fix.phrase) {
-                        (true, _) => "авто",
-                        (false, true) => "фраза",
-                        (false, false) => "слово",
-                    }
+                let count = fix.strokes.len();
+                let kind = match (fix.auto, fix.phrase) {
+                    (true, _) => tr!("авто", "авто"),
+                    (false, true) => tr!("фраза", "фраза"),
+                    (false, false) => tr!("слово", "слово"),
+                };
+                tr!(
+                    log!("punto-rs: исправляю {count} нажатий ({kind})"),
+                    log!("punto-rs: виправляю {count} натискань ({kind})")
                 );
             }
             let grabbed_at = SystemTime::now();
             let grab = match grabs.grab() {
                 Ok(grab) => grab,
                 Err(err) => {
-                    log!("punto-rs: клавиатуры не захвачены, исправление пропущено: {err}");
+                    tr!(
+                        log!("punto-rs: клавиатуры не захвачены, исправление пропущено: {err}"),
+                        log!("punto-rs: клавіатури не захоплено, виправлення пропущено: {err}")
+                    );
                     engine.invalidate();
                     continue;
                 }
@@ -207,7 +214,11 @@ pub fn run<T: KeyOutput>(
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => {
                     engine.invalidate();
                     log!(
-                        "punto-rs: коррекция прервана; буфер сброшен, текст мог быть изменён частично"
+                        "punto-rs: {}",
+                        tr!(
+                            "коррекция прервана; буфер сброшен, текст мог быть изменён частично",
+                            "виправлення перервано; буфер скинуто, текст міг змінитися частково"
+                        )
                     );
                 }
                 Err(err) => return Err(err),
@@ -236,7 +247,7 @@ fn wait_for_input(
         if capture.interrupted() {
             return Err(io::Error::new(
                 io::ErrorKind::Interrupted,
-                "завершение или смена сессии",
+                tr!("завершение или смена сессии", "завершення або зміна сеансу"),
             ));
         }
         let message = match rx.try_recv() {
@@ -244,7 +255,7 @@ fn wait_for_input(
             Err(TryRecvError::Disconnected) => {
                 return Err(io::Error::new(
                     io::ErrorKind::Interrupted,
-                    "поток событий закрыт",
+                    tr!("поток событий закрыт", "потік подій закрито"),
                 ));
             }
             Err(TryRecvError::Empty) => {
@@ -257,7 +268,7 @@ fn wait_for_input(
                     Err(RecvTimeoutError::Disconnected) => {
                         return Err(io::Error::new(
                             io::ErrorKind::Interrupted,
-                            "поток событий закрыт",
+                            tr!("поток событий закрыт", "потік подій закрито"),
                         ));
                     }
                     Err(RecvTimeoutError::Timeout) => None,
@@ -278,7 +289,10 @@ fn wait_for_input(
             } else {
                 engine.discard(&message.event);
             }
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "новый ввод"));
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                tr!("новый ввод", "нове введення"),
+            ));
         }
     }
 }
