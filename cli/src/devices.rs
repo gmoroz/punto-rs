@@ -57,7 +57,7 @@ impl Grabs {
             if device.get_key_state()?.iter().next().is_some() {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
-                    "клавиша ещё нажата",
+                    tr!("клавиша ещё нажата", "клавішу ще натиснуто"),
                 ));
             }
         }
@@ -73,7 +73,10 @@ impl Drop for Grab<'_> {
     fn drop(&mut self) {
         for device in self.0.devices().values_mut() {
             if let Err(err) = device.ungrab() {
-                log!("punto-rs: не удалось отпустить клавиатуру: {err}");
+                tr!(
+                    log!("punto-rs: не удалось отпустить клавиатуру: {err}"),
+                    log!("punto-rs: не вдалося відпустити клавіатуру: {err}")
+                );
             }
         }
     }
@@ -157,13 +160,21 @@ fn attach_devices(
         let (raw, duplicate) = match opened {
             Ok(opened) => opened,
             Err(err) => {
-                log!("punto-rs: не удалось открыть {}: {err}", path.display());
+                let path = path.display();
+                tr!(
+                    log!("punto-rs: не удалось открыть {path}: {err}"),
+                    log!("punto-rs: не вдалося відкрити {path}: {err}")
+                );
                 continue;
             }
         };
         set.insert(path.clone());
         drop(set);
-        log!("punto-rs: слушаю «{name}» ({})", path.display());
+        let shown = path.display();
+        tr!(
+            log!("punto-rs: слушаю «{name}» ({shown})"),
+            log!("punto-rs: слухаю «{name}» ({shown})")
+        );
         let device_id = NEXT_DEVICE_ID.fetch_add(1, Ordering::Relaxed);
         if let Some(duplicate) = duplicate {
             grabs.devices().insert(device_id, duplicate);
@@ -174,7 +185,10 @@ fn attach_devices(
         let grabs = grabs.clone();
         thread::spawn(move || {
             if let Err(err) = read_device(raw, &tx, device_id, kind, &guard) {
-                log!("punto-rs: чтение «{name}» остановлено: {err}");
+                tr!(
+                    log!("punto-rs: чтение «{name}» остановлено: {err}"),
+                    log!("punto-rs: читання «{name}» зупинено: {err}")
+                );
             }
             grabs.devices().remove(&device_id);
             let _ = tx.send(Message {
@@ -255,7 +269,12 @@ fn read_device(
             event,
             at,
         })
-        .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "поток событий закрыт"))
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                tr!("поток событий закрыт", "потік подій закрито"),
+            )
+        })
     };
     let resynced = |device: &RawDevice| -> io::Result<DeviceEvent> {
         let held_keys = if kind == DeviceKind::Keyboard {
@@ -319,73 +338,28 @@ pub fn list_devices() {
     let mut found = false;
     for (path, device) in evdev::enumerate() {
         found = true;
-        let name = device.name().unwrap_or("<без имени>");
+        let name = device.name().unwrap_or(tr!("<без имени>", "<без назви>"));
         let tag = if name == VIRTUAL_NAME {
-            "— своё виртуальное устройство"
+            tr!(
+                "— своё виртуальное устройство",
+                "— власний віртуальний пристрій"
+            )
         } else if is_keyboard(&device) {
-            "— клавиатура"
+            tr!("— клавиатура", "— клавіатура")
         } else if is_pointer(&device) {
-            "— указатель"
+            tr!("— указатель", "— вказівник")
         } else {
             ""
         };
         say!("{:<20} {name:<45} {tag}", path.display());
     }
     if !found {
-        log!("punto-rs: устройства не видны — проверьте доступ к /dev/input/*");
+        tr!(
+            log!("punto-rs: устройства не видны — проверьте доступ к /dev/input/*"),
+            log!("punto-rs: пристроїв не видно — перевірте доступ до /dev/input/*")
+        );
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dropped_events_are_ignored_until_report() {
-        let mut stream = EventStream::default();
-        assert_eq!(
-            stream.observe(&InputEvent::new(EventType::SYNCHRONIZATION.0, 3, 0)),
-            StreamAction::Lost
-        );
-        assert_eq!(
-            stream.observe(&InputEvent::new(EventType::KEY.0, 30, 1)),
-            StreamAction::Ignore
-        );
-        assert_eq!(
-            stream.observe(&InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0)),
-            StreamAction::Resync
-        );
-        assert_eq!(
-            stream.observe(&InputEvent::new(EventType::KEY.0, 30, 0)),
-            StreamAction::Key
-        );
-    }
-
-    #[test]
-    fn key_message_keyboard_and_pointer_events_map_to_engine_input() {
-        let key = |code, value| InputEvent::new(EventType::KEY.0, code, value);
-        assert!(matches!(
-            key_message(&key(30, 1), 7, DeviceKind::Keyboard),
-            Some(DeviceEvent::Key(KeyEvent {
-                device_id: 7,
-                code: 30,
-                value: 1
-            }))
-        ));
-        for kind in [DeviceKind::Keyboard, DeviceKind::Pointer] {
-            assert!(matches!(
-                key_message(&key(keys::BTN_LEFT, 1), 7, kind),
-                Some(DeviceEvent::Click)
-            ));
-            assert!(key_message(&key(keys::BTN_LEFT, 0), 7, kind).is_none());
-        }
-        assert!(key_message(&key(30, 1), 7, DeviceKind::Pointer).is_none());
-    }
-
-    #[test]
-    fn on_default_seat_missing_path_rejected_and_untagged_node_accepted() {
-        assert!(!on_default_seat(Path::new("/nonexistent/punto-rs-input")));
-        // Обычный файл даёт rdev 0: записи udev для c0:0 нет -> seat по умолчанию.
-        assert!(on_default_seat(Path::new("Cargo.toml")));
-    }
-}
+mod tests;

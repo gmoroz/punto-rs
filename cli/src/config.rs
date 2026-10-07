@@ -2,7 +2,7 @@
 
 use std::{collections::HashSet, fs, path::Path};
 
-use crate::keys;
+use crate::{i18n::Language, keys};
 
 #[derive(Debug)]
 pub struct Config {
@@ -19,6 +19,7 @@ pub struct Config {
     pub session_guard: bool,
     pub buffer_timeout_ms: u64,
     pub auto_switch: bool,
+    pub language: Language,
 }
 
 impl Default for Config {
@@ -37,15 +38,33 @@ impl Default for Config {
             session_guard: true,
             buffer_timeout_ms: 30_000,
             auto_switch: true,
+            language: Language::Auto,
         }
     }
 }
 
 impl Config {
     pub fn load(path: &Path) -> Result<Self, String> {
-        let text = fs::read_to_string(path)
-            .map_err(|err| format!("конфиг {} не прочитан: {err}", path.display()))?;
+        let text = fs::read_to_string(path).map_err(|err| {
+            let path = path.display();
+            tr!(
+                format!("конфиг {path} не прочитан: {err}"),
+                format!("конфіг {path} не прочитано: {err}")
+            )
+        })?;
         Self::parse(&text)
+    }
+
+    /// Язык из строки `language=` файла без разбора остального: ошибки
+    /// конфига должны выводиться уже на выбранном языке.
+    pub fn declared_language(path: &Path) -> Option<Language> {
+        fs::read_to_string(path).ok()?.lines().find_map(|raw| {
+            let line = raw.split('#').next().unwrap_or("");
+            let (key, value) = line.split_once('=')?;
+            (key.trim() == "language")
+                .then(|| Language::parse(value.trim().trim_matches('"')))
+                .flatten()
+        })
     }
 
     fn parse(text: &str) -> Result<Self, String> {
@@ -57,9 +76,15 @@ impl Config {
             if line.is_empty() {
                 continue;
             }
-            let error = |message: &str| format!("строка {}: {message}", lineno + 1);
+            let number = lineno + 1;
+            let error = |message: &str| {
+                tr!(
+                    format!("строка {number}: {message}"),
+                    format!("рядок {number}: {message}")
+                )
+            };
             let Some((key, value)) = line.split_once('=') else {
-                errors.push(error("нет '='"));
+                errors.push(error(tr!("нет '='", "немає '='")));
                 continue;
             };
             let key = key.trim();
@@ -70,7 +95,10 @@ impl Config {
                 .unwrap_or(value)
                 .trim();
             if !seen.insert(key) {
-                errors.push(error(&format!("повтор ключа '{key}'")));
+                errors.push(error(&tr!(
+                    format!("повтор ключа '{key}'"),
+                    format!("повтор ключа '{key}'")
+                )));
                 continue;
             }
             let applied = match key {
@@ -91,6 +119,9 @@ impl Config {
                 "track-mouse" => assign_bool(value, &mut cfg.track_mouse),
                 "session-guard" => assign_bool(value, &mut cfg.session_guard),
                 "auto-switch" => assign_bool(value, &mut cfg.auto_switch),
+                "language" => Language::parse(value)
+                    .map(|language| cfg.language = language)
+                    .is_some(),
                 "devices" => {
                     cfg.devices = value
                         .split(',')
@@ -101,43 +132,56 @@ impl Config {
                     true
                 }
                 _ => {
-                    errors.push(error(&format!("неизвестный ключ '{key}'")));
+                    errors.push(error(&tr!(
+                        format!("неизвестный ключ '{key}'"),
+                        format!("невідомий ключ '{key}'")
+                    )));
                     continue;
                 }
             };
             if !applied {
-                errors.push(error(&format!(
-                    "недопустимое значение '{value}' для '{key}'"
+                errors.push(error(&tr!(
+                    format!("недопустимое значение '{value}' для '{key}'"),
+                    format!("неприпустиме значення '{value}' для '{key}'")
                 )));
             }
         }
-        let combos = [
-            ("hotkey", &cfg.hotkey),
-            ("phrase-hotkey", &cfg.phrase_hotkey),
-            ("pause-hotkey", &cfg.pause_hotkey),
-            ("layout-switch", &cfg.layout_switch),
-        ];
-        for (i, (name, combo)) in combos.iter().enumerate() {
-            for (other_name, other) in &combos[..i] {
-                if combo.len() == other.len() && combo.iter().all(|code| other.contains(code)) {
-                    errors.push(format!("'{name}' и '{other_name}' совпадают"));
-                }
-            }
-            // Все префиксные клавиши должны быть модификаторами: иначе они
-            // изменят текст/сбросят буфер ещё до распознавания комбинации.
-            if combo[..combo.len() - 1]
-                .iter()
-                .any(|code| !keys::is_shift(*code) && !keys::is_command_modifier(*code))
-            {
-                errors.push(format!(
-                    "'{name}': перед последней клавишей допустимы только модификаторы"
-                ));
-            }
-        }
+        check_combos(&cfg, &mut errors);
         if errors.is_empty() {
             Ok(cfg)
         } else {
             Err(errors.join("\n"))
+        }
+    }
+}
+
+/// Комбинации не совпадают друг с другом, а перед последней клавишей - модификаторы.
+fn check_combos(cfg: &Config, errors: &mut Vec<String>) {
+    let combos = [
+        ("hotkey", &cfg.hotkey),
+        ("phrase-hotkey", &cfg.phrase_hotkey),
+        ("pause-hotkey", &cfg.pause_hotkey),
+        ("layout-switch", &cfg.layout_switch),
+    ];
+    for (i, (name, combo)) in combos.iter().enumerate() {
+        for (other_name, other) in &combos[..i] {
+            if combo.len() == other.len() && combo.iter().all(|code| other.contains(code)) {
+                errors.push(tr!(
+                    format!("'{name}' и '{other_name}' совпадают"),
+                    format!("'{name}' і '{other_name}' збігаються")
+                ));
+            }
+        }
+        // Все префиксные клавиши должны быть модификаторами: иначе они
+        // изменят текст/сбросят буфер ещё до распознавания комбинации.
+        if combo[..combo.len() - 1]
+            .iter()
+            .any(|code| !keys::is_shift(*code) && !keys::is_command_modifier(*code))
+        {
+            errors.push(tr!(
+                format!("'{name}': перед последней клавишей допустимы только модификаторы"),
+                format!("'{name}': перед останньою клавішею допустимі лише модифікатори")
+            ));
         }
     }
 }
@@ -191,6 +235,9 @@ mod tests {
         assert_eq!(cfg.devices, vec!["Keyboard A", "Keyboard B"]);
         assert!(!cfg.track_mouse);
         assert_eq!(cfg.switch_delay_ms, 200);
+        assert_eq!(cfg.language, Language::Auto);
+        let cfg = Config::parse("language=uk").unwrap();
+        assert_eq!(cfg.language, Language::Uk);
     }
 
     #[test]
@@ -216,6 +263,7 @@ mod tests {
             "max-strokes=4097",
             "buffer-timeout=999",
             "session-guard=maybe",
+            "language=de",
         ] {
             assert!(Config::parse(text).is_err(), "accepted {text:?}");
         }
@@ -224,6 +272,18 @@ mod tests {
     #[test]
     fn accepts_bounds_and_modifier_only_switch() {
         Config::parse("key-delay=1\npost-backspace-delay=0\nswitch-delay=2000\nmax-strokes=4096\nbuffer-timeout=300000\nlayout-switch=ctrl+shift").unwrap();
+    }
+
+    #[test]
+    fn declared_language_read_before_full_parse() {
+        let dir = std::env::temp_dir().join(format!("punto-rs-lang-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.conf");
+        std::fs::write(&path, "hotkey=foo\nlanguage = \"uk\" # мова\n").unwrap();
+        assert_eq!(Config::declared_language(&path), Some(Language::Uk));
+        std::fs::write(&path, "hotkey=insert\n").unwrap();
+        assert_eq!(Config::declared_language(&path), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

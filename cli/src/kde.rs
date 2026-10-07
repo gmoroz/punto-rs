@@ -85,9 +85,10 @@ pub fn watch(
                 .map(|err| err.to_string());
             // Без KDE ошибка повторяется на каждой попытке: в журнал - только новая.
             if error.is_some() && error != last_error {
-                log!(
-                    "punto-rs: раскладка KDE недоступна, автоисправление выключено: {}",
-                    error.as_deref().unwrap_or_default()
+                let error = error.as_deref().unwrap_or_default();
+                tr!(
+                    log!("punto-rs: раскладка KDE недоступна, автоисправление выключено: {error}"),
+                    log!("punto-rs: розкладка KDE недоступна, автовиправлення вимкнено: {error}")
                 );
             }
             last_error = error;

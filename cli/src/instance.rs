@@ -28,7 +28,10 @@ impl InstanceLock {
         if !metadata.is_dir() || metadata.uid() != euid || metadata.mode() & 0o022 != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "небезопасный каталог блокировки",
+                tr!(
+                    "небезопасный каталог блокировки",
+                    "небезпечний каталог блокування"
+                ),
             ));
         }
         let mut file = OpenOptions::new()
@@ -43,13 +46,23 @@ impl InstanceLock {
         if !metadata.is_file() || metadata.uid() != euid || metadata.nlink() != 1 {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "небезопасный файл блокировки",
+                tr!(
+                    "небезопасный файл блокировки",
+                    "небезпечний файл блокування"
+                ),
             ));
         }
         file.try_lock().map_err(|err| {
             io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                format!("другой экземпляр punto-rs уже запущен или блокировка недоступна: {err}"),
+                tr!(
+                    format!(
+                        "другой экземпляр punto-rs уже запущен или блокировка недоступна: {err}"
+                    ),
+                    format!(
+                        "інший екземпляр punto-rs уже запущено або блокування недоступне: {err}"
+                    )
+                ),
             )
         })?;
         file.set_len(0)?;
