@@ -1,4 +1,4 @@
-//! Определение слова, набранного не в той раскладке (EN <-> RU).
+//! Определение слова, набранного не в той раскладке (EN <-> RU или EN <-> UK).
 //!
 //! Модуль самодостаточен: без `crate::` импортов, чтобы генератор модели и
 //! оценщик в `examples/` подключали его через `#[path]`.
@@ -12,20 +12,15 @@
 pub enum Lang {
     En,
     Ru,
+    Uk,
 }
 
 impl Lang {
-    pub fn other(self) -> Self {
-        match self {
-            Lang::En => Lang::Ru,
-            Lang::Ru => Lang::En,
-        }
-    }
-
     fn alphabet(self) -> &'static [char] {
         match self {
             Lang::En => &EN_ALPHABET,
             Lang::Ru => &RU_ALPHABET,
+            Lang::Uk => &UK_ALPHABET,
         }
     }
 
@@ -33,6 +28,7 @@ impl Lang {
         match self {
             Lang::En => EN_MODEL,
             Lang::Ru => RU_MODEL,
+            Lang::Uk => UK_MODEL,
         }
     }
 
@@ -40,29 +36,46 @@ impl Lang {
         match self {
             Lang::En => EN_WORDS,
             Lang::Ru => RU_WORDS,
+            Lang::Uk => UK_WORDS,
         }
     }
 }
 
-const EN_ALPHABET: [char; 26] = [
-    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's',
-    't', 'u', 'v', 'w', 'x', 'y', 'z',
-];
-/// `ё` сводится к `е` до оценки: в словарях и текстах они смешаны.
-const RU_ALPHABET: [char; 32] = [
-    'а', 'б', 'в', 'г', 'д', 'е', 'ж', 'з', 'и', 'й', 'к', 'л', 'м', 'н', 'о', 'п', 'р', 'с', 'т',
-    'у', 'ф', 'х', 'ц', 'ч', 'ш', 'щ', 'ъ', 'ы', 'ь', 'э', 'ю', 'я',
-];
+/// Пара раскладок системы: `shown` - активная, `other` - вторая.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pair {
+    pub shown: Lang,
+    pub other: Lang,
+}
+
+impl Pair {
+    pub const fn new(shown: Lang, other: Lang) -> Self {
+        Self { shown, other }
+    }
+
+    /// Та же пара после переключения раскладки.
+    pub const fn swapped(self) -> Self {
+        Self::new(self.other, self.shown)
+    }
+}
+
+#[path = "layout/keymap.rs"]
+mod keymap;
+pub use keymap::key_char;
+use keymap::{EN_ALPHABET, RU_ALPHABET, UK_ALPHABET, short_words};
 
 /// Цена символа в таблице: `-log2(p) * COST_SCALE`, округлённая до u8.
 pub const COST_SCALE: f64 = 10.0;
 const EN_MODEL: &[u8] = include_bytes!("layout/en.bin");
 const RU_MODEL: &[u8] = include_bytes!("layout/ru.bin");
+const UK_MODEL: &[u8] = include_bytes!("layout/uk.bin");
 const _: () = assert!(EN_MODEL.len() == table_len(Lang::En));
 const _: () = assert!(RU_MODEL.len() == table_len(Lang::Ru));
+const _: () = assert!(UK_MODEL.len() == table_len(Lang::Uk));
 /// Словари - фильтры Блума по индексам букв: около 1% ложных «есть в словаре».
 const EN_WORDS: &[u8] = include_bytes!("layout/en.bloom");
 const RU_WORDS: &[u8] = include_bytes!("layout/ru.bloom");
+const UK_WORDS: &[u8] = include_bytes!("layout/uk.bloom");
 pub const BLOOM_HASHES: u64 = 7;
 
 /// Слова короче этого не исправляются сами: у 1-2 букв нет статистики,
@@ -80,6 +93,7 @@ pub const fn symbols(lang: Lang) -> usize {
     match lang {
         Lang::En => EN_ALPHABET.len() + 1,
         Lang::Ru => RU_ALPHABET.len() + 1,
+        Lang::Uk => UK_ALPHABET.len() + 1,
     }
 }
 
@@ -139,35 +153,12 @@ fn cost(lang: Lang, word: &[usize]) -> f64 {
     f64::from(sum) / f64::from(count.max(1)) / COST_SCALE
 }
 
-/// Символ клавиши в раскладке: (без Shift, с Shift). Только клавиши, для
-/// которых `keys::is_char` истинно; остальные дают `None`.
-pub fn key_char(lang: Lang, code: u16, shift: bool) -> Option<char> {
-    const EN: &str = "1234567890-=qwertyuiop[]asdfghjkl;'`\\zxcvbnm,./";
-    const EN_SHIFT: &str = "!@#$%^&*()_+QWERTYUIOP{}ASDFGHJKL:\"~|ZXCVBNM<>?";
-    const RU: &str = "1234567890-=йцукенгшщзхъфывапролджэё\\ячсмитьбю.";
-    const RU_SHIFT: &str = "!\"№;%:?*()_+ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЁ/ЯЧСМИТЬБЮ,";
-    // Порядок строк выше = скан-коды 2..=13, 16..=27, 30..=41, 43..=53.
-    let position = match code {
-        2..=13 => code - 2,
-        16..=27 => code - 4,
-        30..=41 => code - 6,
-        43..=53 => code - 7,
-        _ => return None,
-    };
-    let row = match (lang, shift) {
-        (Lang::En, false) => EN,
-        (Lang::En, true) => EN_SHIFT,
-        (Lang::Ru, false) => RU,
-        (Lang::Ru, true) => RU_SHIFT,
-    };
-    row.chars().nth(usize::from(position))
-}
-
 /// Буквы слова без пунктуации по краям, в нижнем регистре.
 /// `None` - внутри слова символ не из алфавита (цифра, `_`, точка).
 fn core(lang: Lang, text: &[char]) -> Option<Vec<usize>> {
-    let is_letter =
-        |ch: &char| letter_index(lang, ch.to_lowercase().next().unwrap_or(*ch)).is_some();
+    let is_letter = |ch: &char| {
+        *ch != '\'' && letter_index(lang, ch.to_lowercase().next().unwrap_or(*ch)).is_some()
+    };
     let start = text.iter().position(is_letter)?;
     let end = text.iter().rposition(is_letter)? + 1;
     text[start..end]
@@ -202,7 +193,8 @@ impl Scores {
 
 /// Оценка слова (нажатия до пробела). `None` - слово не кандидат: цифры,
 /// меньше `MIN_LETTERS` букв или в другой раскладке внутри не буквы.
-pub fn scores(keys: &[(u16, bool)], shown: Lang) -> Option<Scores> {
+pub fn scores(keys: &[(u16, bool)], pair: Pair) -> Option<Scores> {
+    let Pair { shown, other } = pair;
     let render = |lang| -> Option<Vec<char>> {
         keys.iter()
             .map(|&(code, shift)| key_char(lang, code, shift))
@@ -212,7 +204,7 @@ pub fn scores(keys: &[(u16, bool)], shown: Lang) -> Option<Scores> {
     if on_screen.iter().any(char::is_ascii_digit) {
         return None;
     }
-    let alt_core = core(shown.other(), &render(shown.other())?)?;
+    let alt_core = core(other, &render(other)?)?;
     if alt_core.len() < MIN_LETTERS {
         return None;
     }
@@ -221,9 +213,9 @@ pub fn scores(keys: &[(u16, bool)], shown: Lang) -> Option<Scores> {
         shown_cost: shown_core
             .as_ref()
             .map_or(UNREADABLE_COST, |letters| cost(shown, letters)),
-        alt_cost: cost(shown.other(), &alt_core),
+        alt_cost: cost(other, &alt_core),
         shown_known: shown_core.is_some_and(|letters| known(shown, &letters)),
-        alt_known: known(shown.other(), &alt_core),
+        alt_known: known(other, &alt_core),
     })
 }
 
@@ -232,26 +224,15 @@ pub fn scores(keys: &[(u16, bool)], shown: Lang) -> Option<Scores> {
 const EXCEPTIONS: &str = include_str!("layout/exceptions.txt");
 
 /// Решает, набрано ли слово не в той раскладке.
-/// `shown` - раскладка, в которой слово сейчас на экране.
-pub fn wrong_layout(keys: &[(u16, bool)], shown: Lang) -> bool {
-    if is_exception(keys, shown) {
+/// `pair.shown` - раскладка, в которой слово сейчас на экране.
+pub fn wrong_layout(keys: &[(u16, bool)], pair: Pair) -> bool {
+    if is_exception(keys, pair.shown) {
         return false;
     }
-    scores(keys, shown).is_some_and(|scores| scores.should_switch(MIN_MARGIN, MAX_ALT_COST))
+    scores(keys, pair).is_some_and(|scores| scores.should_switch(MIN_MARGIN, MAX_ALT_COST))
         // Одна буква сама не исправляется: `f`/`а`, `d`/`в` одинаково возможны.
-        || (keys.len() == 2 && short_wrong(keys, shown) && !shown_known(keys, shown))
+        || (keys.len() == 2 && short_wrong(keys, pair) && !shown_known(keys, pair.shown))
 }
-
-/// Частые слова из 1-2 букв: статистики у них нет, решает закрытый список.
-const EN_SHORT: [&str; 29] = [
-    "a", "i", "am", "an", "as", "at", "be", "by", "do", "go", "he", "hi", "if", "in", "is", "it",
-    "me", "my", "no", "of", "oh", "ok", "on", "or", "so", "to", "up", "us", "we",
-];
-const RU_SHORT: [&str; 41] = [
-    "а", "в", "и", "к", "о", "с", "у", "я", "ж", "бы", "во", "вы", "да", "до", "ее", "ей", "же",
-    "за", "из", "им", "их", "ко", "ли", "мы", "на", "не", "ни", "но", "ну", "об", "ой", "он", "от",
-    "по", "со", "та", "те", "то", "ты", "уж", "ах",
-];
 
 /// Запись нажатий в раскладке `lang` в нижнем регистре, `ё` -> `е`.
 fn lowercase(lang: Lang, keys: &[(u16, bool)]) -> Option<String> {
@@ -277,23 +258,19 @@ fn shown_known(keys: &[(u16, bool)], shown: Lang) -> bool {
 /// Короткое слово (1-2 нажатия) в чужой раскладке: в другой раскладке это
 /// частое слово из списка, а на экране - нет. Для одной буквы признак слабый,
 /// и движок применяет его только перед словом, которое исправляется.
-pub fn short_wrong(keys: &[(u16, bool)], shown: Lang) -> bool {
-    if is_exception(keys, shown) {
+pub fn short_wrong(keys: &[(u16, bool)], pair: Pair) -> bool {
+    if is_exception(keys, pair.shown) {
         return false;
     }
     let short = |lang: Lang| {
-        let words: &[&str] = match lang {
-            Lang::En => &EN_SHORT,
-            Lang::Ru => &RU_SHORT,
-        };
-        lowercase(lang, keys).is_some_and(|text| words.contains(&text.as_str()))
+        lowercase(lang, keys).is_some_and(|text| short_words(lang).contains(&text.as_str()))
     };
-    keys.len() <= 2 && short(shown.other()) && !short(shown)
+    keys.len() <= 2 && short(pair.other) && !short(pair.shown)
 }
 
 /// Буквы слова без пунктуации по краям (текст уже в нижнем регистре, `ё` -> `е`).
 fn word_core(text: &str) -> Option<&str> {
-    let is_letter = |ch: char| ch.is_ascii_lowercase() || ('а'..='я').contains(&ch);
+    let is_letter = |ch: char| ch.is_alphabetic();
     let start = text.find(is_letter)?;
     let end = text
         .char_indices()

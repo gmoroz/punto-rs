@@ -1,7 +1,10 @@
-//! Генератор триграммных таблиц `src/layout/{en,ru}.bin` из списков слов.
+//! Генератор триграммных таблиц `src/layout/{en,ru,uk}.bin` и фильтров Блума
+//! `*.bloom` из списков слов.
 //!
-//! Запуск: `cli/scripts/build_layout_model.sh` (готовит словари и вызывает пример).
-//! Аргументы: `<en_words> <ru_words> <out_dir>`, по слову в строке, UTF-8.
+//! Запуск: `cli/scripts/build_layout_model.sh` (EN, RU) и
+//! `cli/scripts/build_uk_model.sh` (UK) готовят словари и вызывают пример.
+//! Аргументы: `<out_dir> <язык>=<слова>...`, язык - `en`, `ru` или `uk`;
+//! списки по слову в строке, UTF-8. Пересобираются только названные языки.
 // Утилита сборки данных: ошибка ввода-вывода прерывает генерацию целиком.
 #![allow(clippy::expect_used, clippy::panic, clippy::print_stdout)]
 
@@ -74,11 +77,19 @@ fn train(lang: Lang, words: &str) -> (Vec<u8>, Vec<u8>) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let [_, en, ru, out] = args.as_slice() else {
-        panic!("использование: train_layout_model <en_words> <ru_words> <out_dir>");
+    let [_, out, inputs @ ..] = args.as_slice() else {
+        panic!("использование: train_layout_model <out_dir> <en|ru|uk>=<слова>...");
     };
+    assert!(!inputs.is_empty(), "не задан ни один язык");
     let out = std::path::Path::new(out);
-    for (lang, path, name) in [(Lang::En, en, "en"), (Lang::Ru, ru, "ru")] {
+    for input in inputs {
+        let (name, path) = input.split_once('=').expect("ожидается <язык>=<слова>");
+        let lang = match name {
+            "en" => Lang::En,
+            "ru" => Lang::Ru,
+            "uk" => Lang::Uk,
+            _ => panic!("неизвестный язык {name}"),
+        };
         let words = std::fs::read_to_string(path).expect("список слов не прочитан");
         let (table, filter) = train(lang, &words);
         std::fs::write(out.join(format!("{name}.bin")), table).expect("таблица не записана");

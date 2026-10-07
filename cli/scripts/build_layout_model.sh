@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Пересобирает src/layout/{en,ru}.bin из словарей Fedora.
+# Пересобирает src/layout/{en,ru}.{bin,bloom} из словарей Fedora.
+# UK собирается отдельно: scripts/build_uk_model.sh.
 # EN: /usr/share/dict/words (пакет words, Public Domain).
 # RU: hunspell-ru (BSD), словоформы разворачивает unmunch из hunspell-devel;
 # оба пакета скачиваются без установки, root не нужен.
@@ -20,4 +21,4 @@ grep -E '^[a-z]+$' /usr/share/dict/words > en_words.txt
 
 cd "$cli_dir"
 cargo run --quiet --locked --release --example train_layout_model -- \
-    "$work/en_words.txt" "$work/ru_words.txt" src/layout
+    src/layout en="$work/en_words.txt" ru="$work/ru_words.txt"

@@ -10,7 +10,7 @@
 #[path = "../src/layout.rs"]
 mod layout;
 
-use layout::{Lang, MAX_ALT_COST, MIN_MARGIN, Scores, key_char, scores, wrong_layout};
+use layout::{Lang, MAX_ALT_COST, MIN_MARGIN, Pair, Scores, key_char, scores, wrong_layout};
 use std::collections::BTreeMap;
 
 struct Case {
@@ -46,18 +46,19 @@ fn main() {
         .map(|line| line.split('\t').collect::<Vec<_>>())
         .filter(|fields| fields[0] == split)
         .map(|fields| {
-            let lang = if fields[2] == "en" {
-                Lang::En
-            } else {
-                Lang::Ru
+            let pair = match fields[2] {
+                "en" => Pair::new(Lang::En, Lang::Ru),
+                "ru" => Pair::new(Lang::Ru, Lang::En),
+                "en-uk" => Pair::new(Lang::En, Lang::Uk),
+                _ => Pair::new(Lang::Uk, Lang::En),
             };
-            let keys = keys_for(lang, fields[3]);
+            let keys = keys_for(pair.shown, fields[3]);
             Case {
                 class: fields[1].into(),
                 typed: fields[3].into(),
                 should_fix: fields[4] == "fix",
-                scores: scores(&keys, lang),
-                fixed: wrong_layout(&keys, lang),
+                scores: scores(&keys, pair),
+                fixed: wrong_layout(&keys, pair),
             }
         })
         .collect();

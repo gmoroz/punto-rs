@@ -232,9 +232,15 @@ fn abort_does_not_retain_old_or_interleaved_text() {
 const PRIVET_ON_EN: [u16; 6] = [34, 35, 48, 32, 20, 49];
 /// «hello» в EN.
 const HELLO: [u16; 5] = [35, 18, 38, 38, 24];
+/// «привіт», набранное в EN: ghbdsn.
+const PRYVIT_ON_EN: [u16; 6] = [34, 35, 48, 32, 31, 49];
+/// «м'ясо», набранное в EN: v`zcj (апостроф украинской раскладки - на `).
+const MIASO_ON_EN: [u16; 5] = [47, 41, 44, 46, 36];
+const EN_RU: Pair = Pair::new(layout::Lang::En, layout::Lang::Ru);
+const EN_UK: Pair = Pair::new(layout::Lang::En, layout::Lang::Uk);
 
 impl Harness {
-    fn on_layout(layout: Option<Lang>) -> Self {
+    fn on_layout(layout: Option<Pair>) -> Self {
         let mut h = Self::new();
         h.event(DeviceEvent::Layout(layout));
         h
@@ -248,7 +254,7 @@ impl Harness {
 
 #[test]
 fn test_auto_wrong_word_then_space_schedules_word_with_space() {
-    let mut h = Harness::on_layout(Some(Lang::En));
+    let mut h = Harness::on_layout(Some(EN_RU));
     h.type_codes(&PRIVET_ON_EN);
     h.tap(keys::KEY_SPACE);
     let fix = h.ready().unwrap();
@@ -263,13 +269,13 @@ fn test_auto_single_letter_alone_kept_before_fixed_word_joins_fix() {
     const F: u16 = 33;
     const A: u16 = 30;
     const ON_ON_EN: [u16; 3] = [36, 21, keys::KEY_SPACE];
-    let mut h = Harness::on_layout(Some(Lang::En));
+    let mut h = Harness::on_layout(Some(EN_RU));
     h.type_codes(&[F, keys::KEY_SPACE]);
     assert!(h.ready().is_none());
     h.type_codes(&ON_ON_EN);
     let codes: Vec<u16> = h.ready().unwrap().strokes.iter().map(|s| s.code).collect();
     assert_eq!(codes, [&[F, keys::KEY_SPACE][..], &ON_ON_EN].concat());
-    let mut h = Harness::on_layout(Some(Lang::En));
+    let mut h = Harness::on_layout(Some(EN_RU));
     h.type_codes(&[A, keys::KEY_SPACE]);
     h.type_codes(&ON_ON_EN);
     assert_eq!(h.ready().unwrap().strokes.len(), ON_ON_EN.len());
@@ -280,7 +286,7 @@ fn test_auto_exception_short_word_before_fix_not_joined() {
     // «ру пше» в RU: «пше» -> git исправляется, «ру» из исключений не цепляется.
     const RU_ON_RU: [u16; 2] = [35, 18];
     const GIT_ON_RU: [u16; 3] = [34, 23, 20];
-    let mut h = Harness::on_layout(Some(Lang::Ru));
+    let mut h = Harness::on_layout(Some(EN_RU.swapped()));
     h.type_codes(&RU_ON_RU);
     h.tap(keys::KEY_SPACE);
     assert!(h.ready().is_none());
@@ -292,7 +298,7 @@ fn test_auto_exception_short_word_before_fix_not_joined() {
 
 #[test]
 fn test_auto_right_word_unknown_layout_or_disabled_not_scheduled() {
-    let mut h = Harness::on_layout(Some(Lang::En));
+    let mut h = Harness::on_layout(Some(EN_RU));
     h.type_codes(&HELLO);
     h.tap(keys::KEY_SPACE);
     assert!(h.ready().is_none());
@@ -300,7 +306,7 @@ fn test_auto_right_word_unknown_layout_or_disabled_not_scheduled() {
     h.type_codes(&PRIVET_ON_EN);
     h.tap(keys::KEY_SPACE);
     assert!(h.ready().is_none());
-    let mut h = Harness::on_layout(Some(Lang::En));
+    let mut h = Harness::on_layout(Some(EN_RU));
     h.cfg.auto_switch = false;
     h.type_codes(&PRIVET_ON_EN);
     h.tap(keys::KEY_SPACE);
@@ -309,7 +315,7 @@ fn test_auto_right_word_unknown_layout_or_disabled_not_scheduled() {
 
 #[test]
 fn test_auto_next_key_before_space_release_extends_fix() {
-    let mut h = Harness::on_layout(Some(Lang::En));
+    let mut h = Harness::on_layout(Some(EN_RU));
     h.type_codes(&PRIVET_ON_EN);
     h.key(1, keys::KEY_SPACE, 1);
     h.key(1, 19, 1);
@@ -323,13 +329,13 @@ fn test_auto_next_key_before_space_release_extends_fix() {
 
 #[test]
 fn test_auto_backspace_or_held_space_cancels_fix() {
-    let mut h = Harness::on_layout(Some(Lang::En));
+    let mut h = Harness::on_layout(Some(EN_RU));
     h.type_codes(&PRIVET_ON_EN);
     h.key(1, keys::KEY_SPACE, 1);
     h.key(1, keys::KEY_SPACE, 2);
     h.key(1, keys::KEY_SPACE, 0);
     assert!(h.ready().is_none());
-    let mut h = Harness::on_layout(Some(Lang::En));
+    let mut h = Harness::on_layout(Some(EN_RU));
     h.type_codes(&PRIVET_ON_EN);
     h.key(1, keys::KEY_SPACE, 1);
     h.tap(keys::KEY_BACKSPACE);
@@ -339,24 +345,43 @@ fn test_auto_backspace_or_held_space_cancels_fix() {
 
 #[test]
 fn test_layout_event_new_layout_forgets_history_same_keeps_it() {
-    let mut h = Harness::on_layout(Some(Lang::En));
+    let mut h = Harness::on_layout(Some(EN_RU));
     h.tap(30);
-    h.event(DeviceEvent::Layout(Some(Lang::En)));
+    h.event(DeviceEvent::Layout(Some(EN_RU)));
     assert!(h.fix().is_some());
     h.tap(30);
-    h.event(DeviceEvent::Layout(Some(Lang::Ru)));
+    h.event(DeviceEvent::Layout(Some(EN_RU.swapped())));
     assert!(h.fix().is_none());
 }
 
 #[test]
 fn test_switched_toggles_layout_so_own_signal_keeps_history() {
-    let mut h = Harness::on_layout(Some(Lang::En));
+    let mut h = Harness::on_layout(Some(EN_RU));
     h.type_codes(&PRIVET_ON_EN);
     h.tap(keys::KEY_SPACE);
     assert!(h.ready().is_some());
     h.engine.switched();
-    h.event(DeviceEvent::Layout(Some(Lang::Ru)));
+    h.event(DeviceEvent::Layout(Some(EN_RU.swapped())));
     let undo = h.fix().unwrap();
     assert!(!undo.auto);
     assert_eq!(undo.strokes.len(), PRIVET_ON_EN.len() + 1);
+}
+
+#[test]
+fn test_auto_ukrainian_pair_fixes_ukrainian_and_keeps_english() {
+    for word in [&PRYVIT_ON_EN[..], &MIASO_ON_EN] {
+        let mut h = Harness::on_layout(Some(EN_UK));
+        h.type_codes(word);
+        h.tap(keys::KEY_SPACE);
+        assert_eq!(h.ready().unwrap().strokes.len(), word.len() + 1);
+    }
+    let mut h = Harness::on_layout(Some(EN_UK));
+    h.type_codes(&HELLO);
+    h.tap(keys::KEY_SPACE);
+    assert!(h.ready().is_none());
+    // «hello» на украинской раскладке: «руддщ» -> исправляется.
+    let mut h = Harness::on_layout(Some(EN_UK.swapped()));
+    h.type_codes(&HELLO);
+    h.tap(keys::KEY_SPACE);
+    assert!(h.ready().is_some());
 }
